@@ -6,9 +6,11 @@
 #include <errno.h>
 #include <syslog.h>
 
+#include <netdb.h>
+
 #include "mountd.h"
 
-#define NODE_SIZE(node) (sizeof(struct export_node) + ((node)->export_count * sizeof(struct export_entry)))
+#define NODE_SIZE(node) (sizeof(struct export_node) + ((node)->export_count * sizeof(struct export_entry*)))
 #define ENTRY_SIZE(entry) (sizeof(struct export_entry) + ((entry)->network_count * sizeof(struct network_entry)))
 
 /*
@@ -24,7 +26,7 @@ CreateExportEntry(const char *path,
 {
 	struct export_entry *retval = NULL;
 
-	retval = malloc(sizeof(struct export_entry) + network_count * sizeof(*entries));
+	retval = calloc(1, sizeof(struct export_entry) + network_count * sizeof(*entries));
 	if (retval) {
 		retval->export_path = strdup(path);
 		retval->export_flags = flags;
@@ -141,6 +143,9 @@ AddEntryToNode(struct export_node *node, struct export_entry *entry)
 		errno = ENOMEM;
 		goto done;
 	}
+	node = retval;
+	node->exports[node->export_count] = entry;
+	node->export_count++;
 done:
 	return retval;
 	
@@ -155,7 +160,7 @@ CreateNode(const char *name, struct export_entry *entry)
 {
 	struct export_node *retval = NULL;
 
-	retval = malloc(sizeof(*retval) + sizeof(*entry) * entry->network_count);
+	retval = calloc(1, sizeof(*retval) + sizeof(*entry) * entry->network_count);
 	if (retval == NULL)
 		return NULL;
 	memset(retval, 0, sizeof(*retval));
@@ -170,9 +175,76 @@ CreateNode(const char *name, struct export_entry *entry)
 		// Default entry
 	} else {
 		retval->export_count = 1;
-		retval->exports[0] = *entry;
+		retval->exports[0] = entry;
 	}
 	return retval;
+}
+
+void
+PrintExportEntry(struct export_entry *entry, const char *prefix)
+{
+	printf("%sPath %s\n", prefix, entry->export_path);
+	printf("%sExport Flags %#x\n", prefix, entry->export_flags);
+	printf("%sKernel Args:\n", prefix);
+	printf("%s\tex_flags %#x\n", prefix, entry->args.ex_flags);
+	printf("%s\tex_root %d\n", prefix, entry->args.ex_root);
+	printf("%s\tex_anon = { %d, %d, ... }\n", prefix, entry->args.ex_anon.cr_uid, entry->args.ex_anon.cr_gid);
+	if (entry->args.ex_addr) {
+		char host[255];
+		if (getnameinfo(entry->args.ex_addr, entry->args.ex_addr->sa_len,
+				host, sizeof(host), NULL, 0, NI_NUMERICHOST) == -1) {
+			strcpy(host, "<unknown>");
+		}
+		printf("%s\tex_addr %s", prefix, host);
+		if (entry->args.ex_mask) {
+			printf("/%d", netmask_to_masklen(entry->args.ex_mask));
+		}
+		printf("\n");
+	}
+	if (entry->network_count) {
+		size_t i;
+		struct network_entry *ep = entry->entries;
+		printf("%sNetwork entries:\n", prefix);
+		for (i = 0; i < entry->network_count; i++) {
+			char host[255];
+			if (ep[i].network == NULL) {
+				warnx("For some reason, entry %zd is NULL?!?!", i);
+				continue;
+			}
+			if (getnameinfo(ep[i].network, ep[i].network->sa_len,
+					host, sizeof(host), NULL, 0, NI_NUMERICHOST) == -1) {
+				strcpy(host, "<unknown>");
+			}
+			printf("%s\t%s", prefix, host);
+			if (ep[i].mask) {
+				printf("/%d", netmask_to_masklen(ep[i].mask));
+			}
+			printf("\n");
+		}
+	}
+	return;
+}
+static void
+PrintNode(struct export_node *node)
+{
+	// Prints intended by one tab
+	if (node->default_export.export_path) {
+		PrintExportEntry(&node->default_export, "\tDefault ");
+		
+	}
+	if (node->export_count) {
+		size_t indx;
+		struct export_entry **eep = node->exports;
+		
+		for (indx = 0; indx < node->export_count; indx++) {
+			char *prefix;
+			asprintf(&prefix, "\tExport entry %zd: ", indx);
+			PrintExportEntry(eep[indx], prefix);
+			free(prefix);
+		}
+	}
+	return;
+			
 }
 
 static void
@@ -180,6 +252,7 @@ PrintTreeNode(struct export_tree *tree)
 {
 	if (tree->node) {
 		printf("Node:  %s\n", tree->node->export_name);
+		PrintNode(tree->node);
 	}
 	if (tree->left)
 		PrintTreeNode(tree->left);
@@ -201,12 +274,11 @@ AddEntryToTree(const char *name, struct export_entry *entry)
 	
 	if (root == NULL) {
 		// Easy enough, we're adding it here
-		root = malloc(sizeof(*root));
+		root = calloc(1, sizeof(*root));
 		if (root == NULL) {
 			rv = ENOMEM;
 			goto done;
 		}
-		memset(root, 0, sizeof(*root));
 		node = CreateNode(name, entry);
 		if (node == NULL) {
 			free(root);
@@ -244,9 +316,9 @@ AddEntryToTree(const char *name, struct export_entry *entry)
 					goto done;
 				}
 				tree->node = tmp;
-#ifdef TREE_DEBUG
+//#ifdef TREE_DEBUG
 				printf("Added another entry to %s\n", tree->node->export_name);
-#endif
+//#endif
 			} else {
 				// We have to create a node
 				struct export_node *node = CreateNode(name, entry);
@@ -261,7 +333,7 @@ AddEntryToTree(const char *name, struct export_entry *entry)
 					 */
 					struct export_tree *parent = tree->parent;
 					struct export_tree *tmp = tree->left;
-					struct export_tree *new_tree = malloc(sizeof(*new_tree));
+					struct export_tree *new_tree = calloc(1, sizeof(*new_tree));
 					if (new_tree == NULL) {
 						rv = ENOMEM;
 						free(node);	// memory leak
@@ -283,7 +355,7 @@ AddEntryToTree(const char *name, struct export_entry *entry)
 					 */
 					struct export_tree *parent = tree->parent;
 					struct export_tree *tmp = tree->right;
-					struct export_tree *new_tree = malloc(sizeof(*new_tree));
+					struct export_tree *new_tree = calloc(1, sizeof(*new_tree));
 					if (new_tree == NULL) {
 						rv = ENOMEM;
 						free(node);	// memory leak

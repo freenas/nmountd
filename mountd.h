@@ -42,7 +42,7 @@ struct export_node {
 	char	*export_name;	// The name which is exported
 	struct export_entry	default_export;	// This will have network_count of 0
 	size_t	export_count;
-	struct export_entry exports[0];	// export_count of them
+	struct export_entry *exports[0];	// export_count of them
 };
 
 struct export_tree {
@@ -76,5 +76,7 @@ extern void FreeExportEntry(struct export_entry *);
 extern int AddEntryToTree(const char *, struct export_entry *);
 
 extern void PrintTree(void);
+
+extern void PrintExportEntry(struct export_entry *, const char *);
 
 #endif /* _MOUNTD_H */

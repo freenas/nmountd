@@ -365,22 +365,25 @@ parse_opts(char *line, int *opts, struct export_args *args)
 		return line;
 	}
 	
-	while (retval && *retval) {
+	while (retval && *retval == '-') {
 		char *opt;
 		char *optarg = NULL;
 		struct export_options *optptr = export_options;
 		int found = 0;
 		
-		optarg = strsep_quote(&retval, " \t\n");
-		if (optarg == NULL)
+		opt = strsep_quote(&retval, " \t\n");
+		if (opt == NULL)
 			break;
 
+		if (strchr(opt, '=')) {
+			optarg = opt;
+			opt = strsep_quote(&optarg, "=");
+		}
 		for (optptr = export_options; optptr->name; optptr++) {
-			if (strcmp(optarg, optptr->name) == 0) {
-				opt = strsep_quote(&optarg, "=");
+			if (strcmp(opt, optptr->name) == 0) {
 				found = 1;
 				if (debug) {
-					fprintf(stderr, "Found otion %s\n", optptr->name);
+					fprintf(stderr, "Found option %s\n", optptr->name);
 					if (optarg)
 						fprintf(stderr, "\targument = %s\n", optarg);
 				}
@@ -781,6 +784,7 @@ parse_line(char *exp_line)
 					  &eargs,
 					  nets.count,
 					  nets.entries);
+		PrintExportEntry(entry, "Parser: ");
 		rv = AddEntryToTree(exports[i].export_name, entry);
 		PrintTree();
 	}
