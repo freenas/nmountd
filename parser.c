@@ -29,8 +29,8 @@
 
 #include "mountd.h"
 
-static int debug = 0;
-static int verbose = 0;
+int debug = 0;
+int verbose = 0;
 
 enum option_type {
 	UNKNOWN = 0,
@@ -47,28 +47,26 @@ struct export_options {
 };
 
 
+/*
+ * This is a convenience datatype used by the parser
+ * only.  It converts it to the real datatype when done.
+ */
 struct export_network_list {
 	size_t	count;	// Number of entries
 	struct network_entry	*entries;
 };
 
+/*
+ * parser-internal mapping of path to export name.
+ */
 struct export_mount {
 	char *export_name;
 	char *real_name;
 };
 
-struct export_paths {
-	char	*export_name;
-	struct {
-		char	*default_path;
-		int	mountd_options;
-		struct export_args	kernel_options;
-	} default_export;
-
-	// And for the btree for the paths
-	struct export_paths *left, *right;
-};
-
+/*
+ * Table of options in an export line.
+ */
 static struct export_options export_options[] = {
 	{ "-maproot", OPT_CRED, OPT_MAP_ROOT, },
 	{ "-mapall", OPT_CRED, OPT_MAP_ALL, },
@@ -205,121 +203,6 @@ usage(const char *progname)
 	exit(1);
 }
 
-/*
- * Return a pointer to the part of the sockaddr that contains the
- * raw address, and set *nbytes to its length in bytes. Returns
- * NULL if the address family is unknown.
- */
-void *
-sa_rawaddr(struct sockaddr *sa, int *nbytes) {
-	void *p;
-	int len;
-
-	switch (sa->sa_family) {
-	case AF_INET:
-		len = sizeof(((struct sockaddr_in *)sa)->sin_addr);
-		p = &((struct sockaddr_in *)sa)->sin_addr;
-		break;
-	case AF_INET6:
-		len = sizeof(((struct sockaddr_in6 *)sa)->sin6_addr);
-		p = &((struct sockaddr_in6 *)sa)->sin6_addr;
-		break;
-	default:
-		p = NULL;
-		len = 0;
-	}
-
-	if (nbytes != NULL)
-		*nbytes = len;
-	return (p);
-}
-
-/*
- * Make a netmask according to the specified prefix length. The ss_family
- * and other non-address fields must be initialised before calling this.
- */
-static int
-make_netmask(struct sockaddr_storage *ssp, int bitlen)
-{
-	u_char *p;
-	int bits, i, len;
-
-	if ((p = sa_rawaddr((struct sockaddr *)ssp, &len)) == NULL)
-		return (-1);
-	if (bitlen > len * CHAR_BIT)
-		return (-1);
-
-	for (i = 0; i < len; i++) {
-		bits = (bitlen > CHAR_BIT) ? CHAR_BIT : bitlen;
-		*p++ = (u_char)~0 << (CHAR_BIT - bits);
-		bitlen -= bits;
-	}
-	return 0;
-}
-
-/*
- * Given a netmask ("-mask=blah"), convert it into mask length,
- * as in a CIDR.
- * Returns -1 on error.
- */
-static int
-netmask_to_masklen(struct sockaddr *sap)
-{
-	int retval = 0;
-	uint8_t *bp, *endp;
-	int maxbits, byte_count;
-	
-	bp = sa_rawaddr(sap, &byte_count);
-	if (bp == NULL) {
-		errno = EFAULT;
-		return -1;
-	}
-	endp = bp + byte_count;
-	maxbits = byte_count * NBBY;
-
-	for (retval = 0;
-	     bp < endp;
-	     bp++) {
-		int bindex;
-		if (*bp == 0xff) {
-			retval += NBBY;
-			continue;
-		}
-		if (*bp == 0) {
-			break;
-		}
-		if (~*bp & (uint8_t)(~*bp + 1)) {
-			warnx("netmask is not a nice mask");
-			errno = EINVAL;
-			return -1;
-		}
-#if 1
-		bindex = ffs(*bp);
-		if (debug)
-			warnx("*** bindex for %#x = %d\n", *bp, bindex);
-		if (bindex == 0)
-			abort();
-		retval += (NBBY - bindex + 1);
-#else
-		// This loop is at most 7 times, so not too slow
-		while (*bp) {
-			*bp <<= 1;
-			retval += 1;
-		}
-#endif
-		bp++;
-		break;
-	}
-	while (bp < endp) {
-		if (*bp != 0) {
-			warnx("netmask doesn't end in all zeroes");
-			errno = EINVAL;
-			return -1;
-		}
-		bp++;
-	}
-	return retval;
-}
 
 /*
  * An export line has a horrible free format, but is broken down into
@@ -400,7 +283,7 @@ parsecred(char *namelist, struct xucred *cr)
 
 	cr->cr_version = XUCRED_VERSION;
 	/*
-	 * Set up the unprivileged user.
+	 * Set up the default unprivileged user.
 	 */
 	cr->cr_uid = -2;
 	cr->cr_groups[0] = -2;
@@ -854,13 +737,12 @@ parse_line(char *exp_line)
 	struct export_mount *exports = NULL;
 	struct export_network_list nets = { 0 };
 	int options = 0;
-	struct export_args eargs = { 0 };
+	struct export_args eargs = {
+		.ex_anon.cr_uid = -2,
+		.ex_anon.cr_ngroups = 1,
+		.ex_anon.cr_groups[0] = -2,
+	};
 
-	// Need to set up default values for everything
-	eargs.ex_anon.cr_uid = -2;
-	eargs.ex_anon.cr_groups[0] = -2;
-	eargs.ex_anon.cr_ngroups = 1;
-	
 	exp_line = parse_mounts(exp_line, &count, &exports);
 
 	if (count == 0) {
@@ -870,27 +752,37 @@ parse_line(char *exp_line)
 	
 	if (exp_line) {
 		exp_line = parse_opts(exp_line, &options, &eargs);
-		if (exp_line == NULL) {
-			fprintf(stderr, "*** LINE IS NULL ***\n");
-		}
 	}
 	
 	if (exp_line) {
 		exp_line = parse_hosts(exp_line, &nets);
 	}
 	
+	/*
+	 * Now we've got all the mounts and options for this line.
+	 * Iterate over the mounts.
+	 */
 	for (i = 0; i < count; i++) {
-		/*
-		 * Now we've got all the mounts and options for this line.
-		 * We need to first create an entry for the exported name;
-		 * this may already exist.
-		 */
+		struct export_entry *entry;
+		int rv;
+		
 		if (verbose) {
 			printf("Export %s as %s", exports[i].real_name, exports[i].export_name);
 			if (nets.count == 0)
 				printf(" (DEFAULT ENTRY)");
 			printf("\n");
 		}
+		/*
+		 * This gives us an entry with the filesystem to be exported,
+		 * and all the flags and options we set up.
+		 */
+		entry = CreateExportEntry(exports[i].real_name,
+					  options,
+					  &eargs,
+					  nets.count,
+					  nets.entries);
+		rv = AddEntryToTree(exports[i].export_name, entry);
+		PrintTree();
 	}
 	
 }

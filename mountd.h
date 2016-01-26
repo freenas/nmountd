@@ -1,6 +1,8 @@
 #ifndef _MOUNTD_H
 # define _MOUNTD_H
 
+# include <sys/socket.h>
+# include <sys/mount.h>
 /*
  * This defines an exported network or host.
  * This maps very closely to what the kernel wants
@@ -43,6 +45,12 @@ struct export_node {
 	struct export_entry exports[0];	// export_count of them
 };
 
+struct export_tree {
+	struct export_node	*node;	// This contains the name of the node
+	struct export_tree	*parent;	// Parent.  NULL for root, of course
+	struct export_tree	*left, *right;
+};
+
 /*
  * Options used by mountd.
  */
@@ -52,5 +60,21 @@ struct export_node {
 # define OPT_ALLDIRS	0x0008
 # define OPT_INDEXFILE	0x0010
 # define OPT_QUIET	0x0020
+
+extern int debug, verbose;
+
+extern void *sa_rawaddr(struct sockaddr *, int *);
+extern int make_netmask(struct sockaddr_storage *, int);
+extern int netmask_to_masklen(struct sockaddr *);
+
+extern struct export_entry *CreateExportEntry(const char *,
+					      int,
+					      struct export_args *,
+					      size_t,
+					      struct network_entry *);
+extern void FreeExportEntry(struct export_entry *);
+extern int AddEntryToTree(const char *, struct export_entry *);
+
+extern void PrintTree(void);
 
 #endif /* _MOUNTD_H */
