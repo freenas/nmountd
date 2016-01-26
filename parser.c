@@ -27,15 +27,10 @@
 #include <nfsserver/nfs.h>
 #include <fs/nfs/nfsport.h>
 
+#include "mountd.h"
+
 static int debug = 0;
 static int verbose = 0;
-
-#define OPT_MAP_ROOT	0x0001
-#define OPT_MAP_ALL	0x0002
-#define OPT_SECLIST	0x0004
-#define OPT_ALLDIRS	0x0008
-#define OPT_INDEXFILE	0x0010
-#define OPT_QUIET	0x0020
 
 enum option_type {
 	UNKNOWN = 0,
@@ -51,34 +46,10 @@ struct export_options {
 	int value;
 };
 
-struct network_entry {
-	struct sockaddr	*network;
-	struct sockaddr	*mask;	// may be NULL, indicating a host
-};
-
-struct export_entry {
-	char	*export_path;	// The path/FS being exported
-	int	export_flags;	// Used by mountd
-	struct export_args	args;	// Used by the kernel
-	size_t	network_count;
-	struct network_entry entries[0];
-};
-
-struct export_node {
-	char	*export_name;	// The name which is exported
-	struct export_entry	default_export;	// This will have network_count of 0
-	size_t	export_count;
-	struct export_entry exports[0];	// export_count of them
-};
-
-struct export_network {
-	struct sockaddr *ex_addr;
-	size_t		masklen;	// 0 means it's a host, not a network
-};
 
 struct export_network_list {
 	size_t	count;	// Number of entries
-	struct export_network *entries;
+	struct network_entry	*entries;
 };
 
 struct export_mount {
@@ -235,6 +206,122 @@ usage(const char *progname)
 }
 
 /*
+ * Return a pointer to the part of the sockaddr that contains the
+ * raw address, and set *nbytes to its length in bytes. Returns
+ * NULL if the address family is unknown.
+ */
+void *
+sa_rawaddr(struct sockaddr *sa, int *nbytes) {
+	void *p;
+	int len;
+
+	switch (sa->sa_family) {
+	case AF_INET:
+		len = sizeof(((struct sockaddr_in *)sa)->sin_addr);
+		p = &((struct sockaddr_in *)sa)->sin_addr;
+		break;
+	case AF_INET6:
+		len = sizeof(((struct sockaddr_in6 *)sa)->sin6_addr);
+		p = &((struct sockaddr_in6 *)sa)->sin6_addr;
+		break;
+	default:
+		p = NULL;
+		len = 0;
+	}
+
+	if (nbytes != NULL)
+		*nbytes = len;
+	return (p);
+}
+
+/*
+ * Make a netmask according to the specified prefix length. The ss_family
+ * and other non-address fields must be initialised before calling this.
+ */
+static int
+make_netmask(struct sockaddr_storage *ssp, int bitlen)
+{
+	u_char *p;
+	int bits, i, len;
+
+	if ((p = sa_rawaddr((struct sockaddr *)ssp, &len)) == NULL)
+		return (-1);
+	if (bitlen > len * CHAR_BIT)
+		return (-1);
+
+	for (i = 0; i < len; i++) {
+		bits = (bitlen > CHAR_BIT) ? CHAR_BIT : bitlen;
+		*p++ = (u_char)~0 << (CHAR_BIT - bits);
+		bitlen -= bits;
+	}
+	return 0;
+}
+
+/*
+ * Given a netmask ("-mask=blah"), convert it into mask length,
+ * as in a CIDR.
+ * Returns -1 on error.
+ */
+static int
+netmask_to_masklen(struct sockaddr *sap)
+{
+	int retval = 0;
+	uint8_t *bp, *endp;
+	int maxbits, byte_count;
+	
+	bp = sa_rawaddr(sap, &byte_count);
+	if (bp == NULL) {
+		errno = EFAULT;
+		return -1;
+	}
+	endp = bp + byte_count;
+	maxbits = byte_count * NBBY;
+
+	for (retval = 0;
+	     bp < endp;
+	     bp++) {
+		int bindex;
+		if (*bp == 0xff) {
+			retval += NBBY;
+			continue;
+		}
+		if (*bp == 0) {
+			break;
+		}
+		if (~*bp & (uint8_t)(~*bp + 1)) {
+			warnx("netmask is not a nice mask");
+			errno = EINVAL;
+			return -1;
+		}
+#if 1
+		bindex = ffs(*bp);
+		if (debug)
+			warnx("*** bindex for %#x = %d\n", *bp, bindex);
+		if (bindex == 0)
+			abort();
+		retval += (NBBY - bindex + 1);
+#else
+		// This loop is at most 7 times, so not too slow
+		while (*bp) {
+			*bp <<= 1;
+			retval += 1;
+		}
+#endif
+		bp++;
+		break;
+	}
+	while (bp < endp) {
+		if (*bp != 0) {
+			warnx("netmask doesn't end in all zeroes");
+			errno = EINVAL;
+			return -1;
+		}
+		bp++;
+	}
+	return retval;
+}
+
+/*
  * An export line has a horrible free format, but is broken down into
  * three sections.
  * First is a list of one or more export filesystems.  All filesystems
@@ -251,7 +338,7 @@ usage(const char *progname)
 /*
  * Parse a colon separated list of security flavors
  */
-int
+static int
 parsesec(char *seclist, struct export_args *eap)
 {
 	char *cp, savedc;
@@ -460,15 +547,16 @@ print_export_list(struct export_network_list *list)
 	}
 	printf("%zd entries:\n", list->count);
 	for (indx = 0; indx < list->count; indx++) {
-		struct export_network *entry = &list->entries[indx];
-		struct sockaddr *sap = entry->ex_addr;
+		struct network_entry *entry = &list->entries[indx];
+		struct sockaddr *sap = entry->network;
 		char name[256] = { 0 };
 		if (getnameinfo(sap, sap->sa_len, name, sizeof(name), NULL, 0, NI_NUMERICHOST) != 0) {
 			strcpy(name, "<unknown>");
 		}
 		printf("\t%s", name);
-		if (entry->masklen)
-			printf("/%zd", entry->masklen);
+		if (entry->mask) {
+			printf("/%zd", netmask_to_masklen(entry->mask));
+		}
 		printf("\n");
 	}
 	return;
@@ -481,9 +569,11 @@ print_export_list(struct export_network_list *list)
 static int
 add_network_entry(struct export_network_list *list, struct sockaddr *sap, size_t masklen)
 {
-	struct export_network *tmp;
+	struct network_entry *tmp;
 	size_t indx;
 	char name[255];
+	struct sockaddr *mask = NULL;
+	int retval = 0;
 	
 	if (debug)
 		warnx("add_network_entry(%p, %p, %zd)", list, sap, masklen);
@@ -497,126 +587,60 @@ add_network_entry(struct export_network_list *list, struct sockaddr *sap, size_t
 			strcpy(name, "<unknown>");
 		}
 	}
+	if (masklen) {
+		mask = malloc(sap->sa_len);
+		if (mask == NULL) {
+			return ENOMEM;
+		}
+		// Convert masklen to sockaddr
+		memset(mask, 0, sap->sa_len);
+		mask->sa_family = sap->sa_family;
+		mask->sa_len = sap->sa_len;
+		if (make_netmask((void*)mask, masklen) == -1) {
+			if (debug || verbose)
+				warnc(EINVAL, "Cannot make netmask with %zd", masklen);
+			retval = EINVAL;
+			goto done;
+		}
+	}
 	for (indx = 0; indx < list->count; indx++) {
-		if (masklen == list->entries[indx].masklen &&
-		    memcmp(sap, list->entries[indx].ex_addr, sap->sa_len) == 0) {
+		if (((mask == 0 && list->entries[indx].mask == NULL) ||
+		     (memcmp(mask, list->entries[indx].mask, sap->sa_len) == 0)) &&
+		    memcmp(sap, list->entries[indx].network, sap->sa_len) == 0) {
 			// Entry already in the list, so do nothing
 			if (debug) {
 				warnx("Redundant entry (%s) in network list, not adding", name);
 			}
-			return 0;
+			retval = 0;
+			goto done;
 		}
 	}
+
 	// If we're here, then we need to add the entry to the list
 	tmp = realloc(list->entries, sizeof(*tmp) * (indx + 1));
 	if (tmp == NULL) {
 		return ENOMEM;
 	}
-	tmp[indx].ex_addr = malloc(sap->sa_len);
-	if (tmp[indx].ex_addr == NULL) {
-		return ENOMEM;
+	tmp[indx].network = malloc(sap->sa_len);
+	if (tmp[indx].network == NULL) {
+		retval = ENOMEM;
+		goto done;
 	}
-	memcpy(tmp[indx].ex_addr, sap, sap->sa_len);
-	tmp[indx].masklen = masklen;
+	memcpy(tmp[indx].network, sap, sap->sa_len);
+	tmp[indx].mask = mask;
 	list->entries = tmp;
 	list->count++;
 	if (debug) {
 		warnx("Added entry %s/%zd to network list", name, masklen);
 	}
-	return 0;
-}
 
-/*
- * Return a pointer to the part of the sockaddr that contains the
- * raw address, and set *nbytes to its length in bytes. Returns
- * NULL if the address family is unknown.
- */
-void *
-sa_rawaddr(struct sockaddr *sa, int *nbytes) {
-	void *p;
-	int len;
-
-	switch (sa->sa_family) {
-	case AF_INET:
-		len = sizeof(((struct sockaddr_in *)sa)->sin_addr);
-		p = &((struct sockaddr_in *)sa)->sin_addr;
-		break;
-	case AF_INET6:
-		len = sizeof(((struct sockaddr_in6 *)sa)->sin6_addr);
-		p = &((struct sockaddr_in6 *)sa)->sin6_addr;
-		break;
-	default:
-		p = NULL;
-		len = 0;
-	}
-
-	if (nbytes != NULL)
-		*nbytes = len;
-	return (p);
-}
-
-/*
- * Given a netmask ("-mask=blah"), convert it into mask length,
- * as in a CIDR.
- * Returns -1 on error.
- */
-static int
-netmask_to_masklen(struct sockaddr *sap)
-{
-	int retval = 0;
-	uint8_t *bp, *endp;
-	int maxbits, byte_count;
-	
-	bp = sa_rawaddr(sap, &byte_count);
-	if (bp == NULL) {
-		errno = EFAULT;
-		return -1;
-	}
-	endp = bp + byte_count;
-	maxbits = byte_count * NBBY;
-
-	for (retval = 0;
-	     bp < endp;
-	     bp++) {
-		int bindex;
-		if (*bp == 0xff) {
-			retval += NBBY;
-			continue;
-		}
-		if (*bp == 0) {
-			break;
-		}
-		if (~*bp & (uint8_t)(~*bp + 1)) {
-			warnx("netmask is not a nice mask");
-			errno = EINVAL;
-			return -1;
-		}
-#if 0
-		bindex = ffs(*bp);
-		fprintf(stderr, "*** bindex for %#x = %d\n", *bp, bindex);
-		if (bindex == 0)
-			abort();
-		retval += (NBBY - bindex + 1);
-#else
-		// This loop is at most 7 times, so not too slow
-		while (*bp) {
-			*bp <<= 1;
-			retval += 1;
-		}
-#endif
-		bp++;
-		break;
-	}
-	while (bp < endp) {
-		if (*bp != 0) {
-			warnx("netmask doesn't end in all zeroes");
-			errno = EINVAL;
-			return -1;
-		}
-		bp++;
-	}
+done:
+	if (retval && mask)
+		free(mask);
 	return retval;
 }
+
+
 
 /*
  * The last section of an export line consists of networks, hosts, and
