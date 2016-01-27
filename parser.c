@@ -784,9 +784,9 @@ parse_line(char *exp_line)
 					  &eargs,
 					  nets.count,
 					  nets.entries);
-		PrintExportEntry(entry, "Parser: ");
 		rv = AddEntryToTree(exports[i].export_name, entry);
-		PrintTree();
+		if (debug && verbose)
+			PrintTree();
 	}
 	
 }
@@ -845,5 +845,7 @@ main(int ac, char **av)
 		ac--, av++;
 	} while (ac != 0);
 	
+	if (verbose)
+		PrintTree();
 	return 0;
 }
