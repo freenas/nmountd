@@ -248,23 +248,43 @@ PrintNode(struct export_node *node)
 			
 }
 
-static void
-PrintTreeNode(struct export_tree *tree)
+static int
+tree_walker(struct export_tree *tree,
+	    int (^handler)(struct export_node *))
 {
-	if (tree->node) {
-		printf("Node:  %s\n", tree->node->export_name);
-		PrintNode(tree->node);
+	int rv;
+
+	rv = (handler)(tree->node);
+	if (rv != 0)
+		return rv;
+
+	if (tree->left) {
+		rv = tree_walker(tree->left, handler);
+		if (rv)
+			return rv;
 	}
-	if (tree->left)
-		PrintTreeNode(tree->left);
-	if (tree->right)
-		PrintTreeNode(tree->right);
+	if (tree->right) {
+		rv = tree_walker(tree->right, handler);
+		if (rv)
+			return rv;
+	}
+	return 0;
 }
 
 void
 PrintTree(void)
 {
-	PrintTreeNode(root);
+	tree_walker(root, ^(struct export_node *node) {
+			printf("Node:  %s\n", node->export_name);
+			PrintNode(node);
+			return 0;
+		});
+}
+
+void
+IterateTree(int (^handler)(struct export_node *))
+{
+	tree_walker(root, handler);
 }
 
 int
