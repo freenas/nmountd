@@ -29,9 +29,6 @@
 
 #include "mountd.h"
 
-int debug = 0;
-int verbose = 0;
-
 enum option_type {
 	UNKNOWN = 0,
 	OPT_MNT,
@@ -45,7 +42,6 @@ struct export_options {
 	enum option_type type;
 	int value;
 };
-
 
 /*
  * This is a convenience datatype used by the parser
@@ -194,13 +190,6 @@ get_line(FILE *fp)
 		line[totlen] = '\0';
 	} while (totlen == 0 || cont_line);
 	return (line);
-}
-
-static void
-usage(const char *progname)
-{
-	fprintf(stderr, "Usage: %s [-dv] [export_file [...]]\n", progname);
-	exit(1);
 }
 
 
@@ -791,7 +780,7 @@ parse_line(char *exp_line)
 	
 }
 
-static void
+void
 read_export_file(FILE *fp)
 {
 	char *line;
@@ -811,41 +800,3 @@ read_export_file(FILE *fp)
 	
 }
 
-int
-main(int ac, char **av)
-{
-	char *exp_file = "/etc/exports";
-	char *line;
-	int c;
-
-	while ((c = getopt(ac, av, "dv")) != -1) {
-		switch (c) {
-		case 'd':	debug++; break;
-		case 'v':	verbose++; break;
-		default:	usage(av[0]);
-		}
-	}
-	av += optind;
-	ac -= optind;
-
-	if (ac == 0) {
-		exp_file = "/etc/exports";
-		ac = 1;	// hack
-	} else {
-		exp_file = *av++;
-	}
-
-	do {
-		FILE *fp = fopen(exp_file, "r");
-		if (fp == NULL) {
-			warn("Could not open %s", exp_file);
-		}
-		read_export_file(fp);
-		fclose(fp);
-		ac--, av++;
-	} while (ac != 0);
-	
-	if (verbose)
-		PrintTree();
-	return 0;
-}

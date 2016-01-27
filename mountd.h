@@ -63,10 +63,12 @@ struct export_tree {
 
 extern int debug, verbose;
 
+// Network support routines
 extern void *sa_rawaddr(struct sockaddr *, int *);
 extern int make_netmask(struct sockaddr_storage *, int);
 extern int netmask_to_masklen(struct sockaddr *);
 
+// Tree-related routines
 extern struct export_entry *CreateExportEntry(const char *,
 					      int,
 					      struct export_args *,
@@ -79,4 +81,6 @@ extern void PrintTree(void);
 
 extern void PrintExportEntry(struct export_entry *, const char *);
 
+// Parsing
+extern void read_export_file(FILE *);
 #endif /* _MOUNTD_H */

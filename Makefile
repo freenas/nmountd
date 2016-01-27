@@ -1,5 +1,5 @@
 PROG=	mountd
-SRCS=	parser.c network.c tree.c
+SRCS=	main.c parser.c network.c tree.c
 MAN=
 
 CFLAGS=	-O0 -g
