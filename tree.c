@@ -62,17 +62,6 @@ FreeExportEntry(struct export_entry *entry)
 	return;
 }
 
-/*
- * Add the specified entry to the btree, using the given export name.
- * If there is no node matching the name (which must be an exact match),
- * then one is created, and inserted into the tree.
- *
- * Returns 0 on success, an errno on error.
- * Possible errors are:
- * ENOMEM -- no memory for allocation
- * EEXIST -- an entry for name already exists, with a default value,
- * and entry also specifies a default value.
- */
 
 static struct export_tree *root;
 
@@ -118,6 +107,18 @@ FindNodeBestName(const char *name)
 	} while (retval);
 	return retval;
 }
+
+/*
+ * Add the specified entry to the btree, using the given export name.
+ * If there is no node matching the name (which must be an exact match),
+ * then one is created, and inserted into the tree.
+ *
+ * Returns 0 on success, an errno on error.
+ * Possible errors are:
+ * ENOMEM -- no memory for allocation
+ * EEXIST -- an entry for name already exists, with a default value,
+ * and entry also specifies a default value.
+ */
 
 static struct export_node *
 AddEntryToNode(struct export_node *node, struct export_entry *entry)
@@ -312,6 +313,11 @@ AddEntryToTree(const char *name, struct export_entry *entry)
 				 */
 				struct export_node *tmp = AddEntryToNode(tree->node, entry);
 				if (tmp == NULL) {
+					if (errno == EEXIST) {
+						warnx("Could not add %s (default entry already exists)", entry->export_path);
+					} else {
+						warn("Could not add %s", entry->export_path);
+					}
 					rv = ENOMEM;
 					goto done;
 				}
