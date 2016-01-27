@@ -316,9 +316,9 @@ AddEntryToTree(const char *name, struct export_entry *entry)
 					goto done;
 				}
 				tree->node = tmp;
-//#ifdef TREE_DEBUG
+#ifdef TREE_DEBUG
 				printf("Added another entry to %s\n", tree->node->export_name);
-//#endif
+#endif
 			} else {
 				// We have to create a node
 				struct export_node *node = CreateNode(name, entry);
