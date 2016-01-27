@@ -6,6 +6,7 @@
 #include <err.h>
 #include <errno.h>
 #include <string.h>
+#include <netdb.h>
 
 #include <sys/param.h>
 #include <sys/fcntl.h>
@@ -60,7 +61,7 @@ UnexportFilesystems(void)
 	struct xucred anon;
 	struct export_args export = { .ex_flags = MNT_DELEXPORT };
 	struct nfsex_args eargs;
-	struct iovec *iov;
+	struct iovec *iov = NULL;
 	struct xvfsconf vfc;
 	char errmsg[255];
 	int iovlen;
@@ -87,11 +88,17 @@ UnexportFilesystems(void)
 			continue;
 		}
 		// If it's not exported, nothing to do
-		if ((sfs->f_flags & MNT_EXPORTED) == 0)
+		if ((sfs->f_flags & MNT_EXPORTED) == 0) {
+			if (debug)
+				warnx("Skipping %s because it is not exported", sfs->f_mntonname);
 			continue;
+		}
 
-		if (vfc.vfc_flags & VFCF_NETWORK)
+		if (vfc.vfc_flags & VFCF_NETWORK) {
+			if (debug)
+				warnx("Skipping %s becasue it is a network filesystem", sfs->f_mntonname);
 			continue;
+		}
 
 #define SET_STR(iov, str) do { \
 			(iov).iov_base = str; \
@@ -103,8 +110,116 @@ UnexportFilesystems(void)
 #undef SET_STR
 		errmsg[0] = 0;
 
+		if (debug)
+			warnx("About to unexport %s", sfs->f_mntonname);
 		if (nmount(iov, iovlen, sfs->f_flags) == -1 &&
 		    errno != ENOENT && errno != ENOTSUP && errno != EXDEV)
 			warn("Can't delete export for %s: %s", sfs->f_mntonname, errmsg);
 	}
+	if (iov != NULL) {
+		free(iov[0].iov_base); // fstype
+		free(iov[2].iov_base); // fspath
+		free(iov[4].iov_base); // from
+		free(iov[6].iov_base); // update
+		free(iov[8].iov_base); // export
+		free(iov[10].iov_base); // errmsg
+		free(iov);
+		iovlen = 0;
+	}
+}
+
+/*
+ * Iterate through the tree, and mark each filesystem as exportable.
+ * Also set up the networking bits for the kernel.
+ */
+void
+ExportFilesystems(void)
+{
+	IterateTree(^(struct export_node *exp) {
+			size_t entry;
+			struct iovec *iov = NULL;
+			char errmsg[255];
+			struct export_args export = { 0 };
+			int iovlen = 0;
+			
+			build_iovec(&iov, &iovlen, "fstype", NULL, 0);
+			build_iovec(&iov, &iovlen, "fspath", NULL, 0);
+			build_iovec(&iov, &iovlen, "from", NULL, 0);
+			build_iovec(&iov, &iovlen, "update", NULL, 0);
+			build_iovec(&iov, &iovlen, "export", &export, sizeof(export));
+			build_iovec(&iov, &iovlen, "errmsg", errmsg, sizeof(errmsg));
+
+			for (entry = 0; entry < exp->export_count; entry++) {
+				struct export_entry *ep = exp->exports[entry];
+				struct statfs sfs;
+				size_t net_entry;
+				char *real_path;
+
+				real_path = realpath(ep->export_path, NULL);
+				if (real_path == NULL) {
+					warn("Could not export %s -- not a real path", ep->export_path);
+					continue;
+				}
+				if (statfs(real_path, &sfs) == -1) {
+					warn("Could not find %s (really %s), cannot export", real_path, ep->export_path);
+					free(real_path);
+					continue;
+				}
+				if ((ep->export_flags & OPT_ALLDIRS) == 0 &&
+				    strcmp(real_path, sfs.f_mntonname) != 0) {
+					warn("-alldirs specified, but %s is not a mount point", ep->export_path);
+					free(real_path);
+					continue;
+				}
+				for (net_entry = 0; net_entry < ep->network_count; net_entry++) {
+					export = ep->args;
+					export.ex_addr = ep->entries[net_entry].network;
+					export.ex_addrlen = export.ex_addr->sa_len;
+					if (ep->entries[net_entry].mask) {
+						export.ex_mask = ep->entries[net_entry].mask;
+						export.ex_masklen = export.ex_mask->sa_len;
+					} else {
+						export.ex_mask = NULL;
+						export.ex_masklen = 0;
+					}
+#define SET_STR(iov, str) do {		      \
+						(iov).iov_base = str;	\
+						(iov).iov_len = strlen(str) + 1; \
+					} while (0)
+					SET_STR(iov[1], sfs.f_fstypename);
+					SET_STR(iov[3], sfs.f_mntonname);
+					SET_STR(iov[5], sfs.f_mntfromname);
+#undef SET_STR
+					export.ex_flags |= MNT_EXPORTED;
+					if (debug) {
+						warnx("About to export %s", sfs.f_mntonname);
+						if (verbose) {
+							char name[255];
+							struct sockaddr *sap = ep->entries[net_entry].network;
+							if (getnameinfo(sap, sap->sa_len, name, sizeof(name), NULL, 0, NI_NUMERICHOST) == -1) {
+								strcpy(name, "<unknown>");
+							}
+							if (export.ex_mask) {
+								warnx("to %s/%d", name, netmask_to_masklen(export.ex_mask));
+							} else {
+								warnx("to %s", name);
+							}
+						}
+					}
+					errmsg[0] = 0;
+					if (nmount(iov, iovlen, sfs.f_flags) == -1) {
+						warn("Cannot export %s: %s", sfs.f_mntonname, errmsg);
+					}
+				}
+			}
+			free(iov[0].iov_base); // fstype
+			free(iov[2].iov_base); // fspath
+			free(iov[4].iov_base); // from
+			free(iov[6].iov_base); // update
+			free(iov[8].iov_base); // export
+			free(iov[10].iov_base); // errmsg
+			free(iov);
+
+			return 0;
+		});
 }

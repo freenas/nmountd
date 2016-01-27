@@ -40,6 +40,9 @@ main(int ac, char **av)
 		exp_file = *av++;
 	}
 
+	if (ac > 0) {
+		UnexportFilesystems();
+	}
 	do {
 		FILE *fp = fopen(exp_file, "r");
 		if (fp == NULL) {
@@ -52,5 +55,7 @@ main(int ac, char **av)
 	
 	if (verbose)
 		PrintTree();
+	ExportFilesystems();
+	UnexportFilesystems();
 	return 0;
 }

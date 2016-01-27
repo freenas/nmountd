@@ -81,6 +81,13 @@ extern void PrintTree(void);
 
 extern void PrintExportEntry(struct export_entry *, const char *);
 
+extern void IterateTree(int (^)(struct export_node *));
+
 // Parsing
 extern void read_export_file(FILE *);
+
+// Mount support
+extern void UnexportFilesystems(void);
+extern void ExportFilesystems(void);
+
 #endif /* _MOUNTD_H */
