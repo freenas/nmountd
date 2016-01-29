@@ -96,7 +96,7 @@ main(int ac, char **av)
 		if (ep)
 			printf("export_name = %s, real path = %s\n", export_name, ep->export_path);
 		else
-			printf("Could not find appropriate export");
+			printf("Could not find appropriate export\n");
 	}
 	ExportFilesystems();
 	UnexportFilesystems();

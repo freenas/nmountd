@@ -145,6 +145,13 @@ FindBestExportForAddress(const char *requested, struct sockaddr *sap, char **exp
 		return NULL;
 
 	best_node = best_tree_node->node;
+	/*
+	 * Because of how FindNodeBestName works, we need to make sure
+	 * that best_node->export_name is a subset of requested.
+	 */
+	if (strncmp(best_node->export_name, requested,
+		    strlen(best_node->export_name)) != 0)
+		return NULL;
 	
 	for (i = 0; i < best_node->export_count; i++) {
 		size_t network_indx;
