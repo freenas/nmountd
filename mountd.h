@@ -61,12 +61,21 @@ struct export_tree {
 # define OPT_INDEXFILE	0x0010
 # define OPT_QUIET	0x0020
 
+/*
+ * Values used by the network functions.
+ */
+# define NET_MATCH_NONE	(-1)
+# define NET_MATCH_HOST	(SOCK_MAXADDRLEN * NBBY)
+
+# define NODE_HAS_DEFAULT(np) ((np) && (np)->default_export.export_path != NULL)
+
 extern int debug, verbose;
 
 // Network support routines
-extern void *sa_rawaddr(struct sockaddr *, int *);
+extern uint8_t *sa_rawaddr(struct sockaddr *, int *);
 extern int make_netmask(struct sockaddr_storage *, int);
 extern int netmask_to_masklen(struct sockaddr *);
+extern int network_compare(struct network_entry *, struct sockaddr *);
 
 // Tree-related routines
 extern struct export_entry *CreateExportEntry(const char *,
@@ -82,6 +91,9 @@ extern void PrintTree(void);
 extern void PrintExportEntry(struct export_entry *, const char *);
 
 extern void IterateTree(int (^)(struct export_node *));
+
+extern struct export_tree *FindNodeBestName(const char *);
+extern struct export_entry *FindBestExportForAddress(const char *, struct sockaddr *, char **);
 
 // Parsing
 extern void read_export_file(FILE *);

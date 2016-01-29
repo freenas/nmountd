@@ -36,7 +36,7 @@
  * raw address, and set *nbytes to its length in bytes. Returns
  * NULL if the address family is unknown.
  */
-void *
+uint8_t *
 sa_rawaddr(struct sockaddr *sa, int *nbytes) {
 	void *p;
 	int len;
@@ -57,7 +57,7 @@ sa_rawaddr(struct sockaddr *sa, int *nbytes) {
 
 	if (nbytes != NULL)
 		*nbytes = len;
-	return (p);
+	return (uint8_t*)(p);
 }
 
 /*
@@ -67,7 +67,7 @@ sa_rawaddr(struct sockaddr *sa, int *nbytes) {
 int
 make_netmask(struct sockaddr_storage *ssp, int bitlen)
 {
-	u_char *p;
+	uint8_t *p;
 	int bits, i, len;
 
 	if ((p = sa_rawaddr((struct sockaddr *)ssp, &len)) == NULL)
@@ -145,4 +145,56 @@ netmask_to_masklen(struct sockaddr *sap)
 		bp++;
 	}
 	return retval;
+}
+
+/*
+ * Compare a sockaddr with a struct network_entry.
+ * Returns NET_MATCH_NONE if it isn't a match,
+ * NET_MATCH_HOST if it's a perfect match, and
+ * the number of bits in the network mask otherwise.
+ */
+int
+network_compare(struct network_entry *network,
+		struct sockaddr *sap)
+{
+	uint8_t *addr_bytes,
+		*network_bytes,
+		*mask_bytes;
+	int nbytes;
+	size_t i;
+	
+	// First check -- for errors
+	if (network == NULL ||
+	    network->network == NULL ||
+	    sap == NULL)
+		return NET_MATCH_NONE;
+
+	// Second check -- families
+	if (network->network->sa_family != sap->sa_family)
+		return NET_MATCH_NONE;
+	// Now a sanity check
+	if (network->mask &&
+	    network->mask->sa_family != network->network->sa_family)
+		return NET_MATCH_NONE;
+
+	addr_bytes = sa_rawaddr(sap, &nbytes);
+	network_bytes = sa_rawaddr(network->network, NULL);
+
+	// Easy check:  if mask is NULL, just do a memcmp
+	if (network->mask == NULL) {
+		if (memcmp(addr_bytes, network_bytes, nbytes) == 0) {
+			return NET_MATCH_HOST;
+		} else {
+			return NET_MATCH_NONE;
+		}
+	}
+	// Okay, have to compare with the mask
+	mask_bytes = sa_rawaddr(network->mask, NULL);
+	for (i = 0; i < nbytes; i++) {
+		if ((addr_bytes[i] & mask_bytes[i]) !=
+		    (network_bytes[i] & mask_bytes[i])) {
+			return NET_MATCH_NONE;
+		}
+	}
+	return netmask_to_masklen(network->mask);
 }

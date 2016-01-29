@@ -65,6 +65,7 @@ FreeExportEntry(struct export_entry *entry)
 
 static struct export_tree *root;
 
+
 /*
  * Return the node with the best match for
  * the given name.
@@ -105,6 +106,66 @@ FindNodeBestName(const char *name)
 			}
 		}
 	} while (retval);
+	return retval;
+}
+/*
+ * Return the export_entry that best matches
+ * the given name and ip address.
+ *
+ * Returns NULL if it can't find a match.
+ *
+ * If export_name is non-NULL, it will be set to
+ * point to the appropriate exported name.
+ *
+ * Okay, "best" here can go one of two ways:
+ * First, we can look for the export_node with
+ * the longest match for the given name, and then
+ * find the export_entry that best matches the address,
+ * and return that.  (This may be the default export,
+ * if there is one, if the address doesn't match any
+ * of the networks.)
+ *
+ * The other way to find the "best" would be to find
+ * the node that has the best match for the address,
+ * then the one with the longest name match.
+ *
+ * I'm going with the first way for now.
+ */
+struct export_entry *
+FindBestExportForAddress(const char *requested, struct sockaddr *sap, char **export_name)
+{
+	struct export_entry *retval = NULL;
+	struct export_tree *best_tree_node;
+	struct export_node *best_node;
+	size_t i;
+	int best_match = NET_MATCH_NONE;
+	
+	best_tree_node = FindNodeBestName(requested);
+	if (best_tree_node == NULL)
+		return NULL;
+
+	best_node = best_tree_node->node;
+	
+	for (i = 0; i < best_node->export_count; i++) {
+		size_t network_indx;
+		struct export_entry *ep = best_node->exports[i];
+
+		for (network_indx = 0;
+		     network_indx < ep->network_count;
+		     network_indx++) {
+			int cmp = network_compare(ep->entries+network_indx,
+						  sap);
+			if (cmp > best_match) {
+				retval = ep;
+				best_match = cmp;
+			}
+		}
+	}
+	if (retval == NULL && NODE_HAS_DEFAULT(best_node)) {
+		retval = &best_node->default_export;
+	}
+	if (retval && export_name)
+		*export_name = best_node->export_name;
 	return retval;
 }
 

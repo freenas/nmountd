@@ -16,17 +16,49 @@ usage(const char *progname)
 	exit(1);
 }
 
+struct Find {
+	struct sockaddr *addr;
+	char *path;
+};
+
+#include <netdb.h>
+
+static struct Find *
+Find(const char *arg)
+{
+	struct Find *retval = NULL;
+	char *s = strdup(arg);
+	char *path, *addr = s;
+	struct addrinfo *ai;
+	
+	path = strsep(&addr, ";");
+
+	printf("path = %s, addr = %s\n", path, addr);
+	retval = calloc(1, sizeof(*retval));
+	retval->path = strdup(path);
+	
+	if (getaddrinfo(addr, NULL, NULL, &ai) != 0) {
+		abort();
+	} else {
+		retval->addr = ai->ai_addr;
+	}
+	free(s);
+	return retval;
+}
+
 int
 main(int ac, char **av)
 {
 	char *exp_file = "/etc/exports";
 	char *line;
 	int c;
-
-	while ((c = getopt(ac, av, "dv")) != -1) {
+	struct Find *findit = NULL;
+	
+	while ((c = getopt(ac, av, "dvF:")) != -1) {
 		switch (c) {
 		case 'd':	debug++; break;
 		case 'v':	verbose++; break;
+		case 'F':	findit = Find(optarg); break;
 		default:	usage(av[0]);
 		}
 	}
@@ -55,6 +87,17 @@ main(int ac, char **av)
 	
 	if (verbose)
 		PrintTree();
+
+	if (findit) {
+		struct export_entry *ep;
+		char *export_name;
+		
+		ep = FindBestExportForAddress(findit->path, findit->addr, &export_name);
+		if (ep)
+			printf("export_name = %s, real path = %s\n", export_name, ep->export_path);
+		else
+			printf("Could not find appropriate export");
+	}
 	ExportFilesystems();
 	UnexportFilesystems();
 	return 0;
