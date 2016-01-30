@@ -198,3 +198,13 @@ network_compare(struct network_entry *network,
 	}
 	return netmask_to_masklen(network->mask);
 }
+
+int
+check_ipv6(void)
+{
+	int s = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+	if (s < 0)
+		return 0;
+	close(s);
+	return 1;
+}

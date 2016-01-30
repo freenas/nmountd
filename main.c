@@ -3,11 +3,16 @@
 #include <unistd.h>
 #include <string.h>
 #include <err.h>
+#include <syslog.h>
 
 #include "mountd.h"
 
 int debug = 0;
 int verbose = 0;
+struct server_config server_config = {
+	.resvport_only = 1,
+	.dir_only = 1,
+};
 
 static void
 usage(const char *progname)
@@ -54,14 +59,22 @@ main(int ac, char **av)
 	int c;
 	struct Find *findit = NULL;
 	
-	while ((c = getopt(ac, av, "dvF:")) != -1) {
+	while ((c = getopt(ac, av, "2nrdvlF:")) != -1) {
 		switch (c) {
+		case '2':	server_config.force_v2 = 1; break;
+		case 'n':	server_config.resvport_only = 0; break;
+		case 'r':	server_config.dir_only = 0; break;
+		case 'l':	server_config.dolog = 1; break;
 		case 'd':	debug++; break;
 		case 'v':	verbose++; break;
 		case 'F':	findit = Find(optarg); break;
 		default:	usage(av[0]);
 		}
 	}
+
+	if (check_ipv6() != 0)
+		server_config.have_v6 = 1;
+	
 	av += optind;
 	ac -= optind;
 
@@ -101,4 +114,11 @@ main(int ac, char **av)
 	ExportFilesystems();
 	UnexportFilesystems();
 	return 0;
+}
+
+void
+out_of_mem(void)
+{
+	syslog(LOG_ERR, "out of memory");
+	exit(2);
 }

@@ -52,6 +52,18 @@ struct export_tree {
 };
 
 /*
+ * Configuration structure.  This is mainly to get all of the
+ * options in one place.
+ */
+struct server_config {
+	int force_v2;
+	int resvport_only;
+	int dir_only;
+	int dolog;
+	int have_v6;
+};
+
+/*
  * Options used by mountd.
  */
 # define OPT_MAP_ROOT	0x0001
@@ -69,13 +81,19 @@ struct export_tree {
 
 # define NODE_HAS_DEFAULT(np) ((np) && (np)->default_export.export_path != NULL)
 
+# define _PATH_RMOUNTLIST	"/var/db/mountdtab"
+
 extern int debug, verbose;
+extern struct server_config server_config;
+
+extern void out_of_mem(void);
 
 // Network support routines
 extern uint8_t *sa_rawaddr(struct sockaddr *, int *);
 extern int make_netmask(struct sockaddr_storage *, int);
 extern int netmask_to_masklen(struct sockaddr *);
 extern int network_compare(struct network_entry *, struct sockaddr *);
+extern int check_ipv6(void);
 
 // Tree-related routines
 extern struct export_entry *CreateExportEntry(const char *,
