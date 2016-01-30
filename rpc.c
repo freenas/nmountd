@@ -52,6 +52,10 @@ static const char copyright[] =
 #include <sys/stat.h>
 #include <sys/syslog.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
+
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <rpc/rpc.h>
 #include <rpc/rpc_com.h>
@@ -65,6 +69,17 @@ static const char copyright[] =
 #include <fs/nfs/nfsport.h>
 
 #include "mountd.h"
+
+char *hosts[] = {
+	"*",
+};
+int nhosts = 1;
+char *svcport_str;
+int *sock_fd;
+size_t sock_fdcnt;
+int mallocd_svcport;
+int sock_fdpos;
+size_t xcreated;
 
 struct fhreturn {
 	int	fhr_flag;
@@ -81,7 +96,8 @@ struct fhreturn {
 struct mountlist {
 	struct mountlist *ml_next;
 	char	ml_host[MNTNAMLEN+1];
-	char	ml_dirp[MNTPATHLEN+1];
+	char	ml_exp[MNTNAMLEN+1];
+	char	ml_real[MNTPATHLEN+1];
 };
 /*
  * I have no idea what to do for this.
@@ -95,7 +111,7 @@ static int resvport_only;
 static struct mountlist *current_mounts;
 
 static void
-add_mount(char *dirp, char *hostp)
+add_mount(char *exp, char *real, char *hostp)
 {
 	struct mountlist *mlp, **mlpp;
 	FILE *mlfile;
@@ -103,7 +119,7 @@ add_mount(char *dirp, char *hostp)
 	mlpp = &current_mounts;
 	mlp = current_mounts;
 	while (mlp) {
-		if (!strcmp(mlp->ml_host, hostp) && !strcmp(mlp->ml_dirp, dirp))
+		if (!strcmp(mlp->ml_host, hostp) && !strcmp(mlp->ml_exp, exp))
 			return;
 		mlpp = &mlp->ml_next;
 		mlp = mlp->ml_next;
@@ -111,18 +127,53 @@ add_mount(char *dirp, char *hostp)
 	mlp = (struct mountlist *)malloc(sizeof (*mlp));
 	if (mlp == (struct mountlist *)NULL)
 		out_of_mem();
-	strncpy(mlp->ml_host, hostp, MNTNAMLEN);
-	mlp->ml_host[MNTNAMLEN] = '\0';
-	strncpy(mlp->ml_dirp, dirp, MNTPATHLEN);
-	mlp->ml_dirp[MNTPATHLEN] = '\0';
+	strlcpy(mlp->ml_host, hostp, MNTNAMLEN+1);
+	strlcpy(mlp->ml_exp, exp, MNTPATHLEN);
+	strlcpy(mlp->ml_real, real, MNTPATHLEN+1);
 	mlp->ml_next = (struct mountlist *)NULL;
 	*mlpp = mlp;
 	if ((mlfile = fopen(_PATH_RMOUNTLIST, "a")) == NULL) {
 		syslog(LOG_ERR, "can't update %s", _PATH_RMOUNTLIST);
 		return;
 	}
-	fprintf(mlfile, "%s %s\n", mlp->ml_host, mlp->ml_dirp);
+	fprintf(mlfile, "%s %s %s\n", mlp->ml_host, mlp->ml_exp, mlp->ml_real);
 	fclose(mlfile);
+}
+
+void
+del_mount(char *hostp, char *exp)
+{
+	struct mountlist *mlp, **mlpp;
+	struct mountlist *mlp2;
+	FILE *mlfile;
+	int fnd = 0;
+
+	mlpp = &current_mounts;
+	mlp = current_mounts;;
+	while (mlp) {
+		if (!strcmp(mlp->ml_host, hostp) &&
+		    (!exp || !strcmp(mlp->ml_exp, exp))) {
+			fnd = 1;
+			mlp2 = mlp;
+			*mlpp = mlp = mlp->ml_next;
+			free((caddr_t)mlp2);
+		} else {
+			mlpp = &mlp->ml_next;
+			mlp = mlp->ml_next;
+		}
+	}
+	if (fnd) {
+		if ((mlfile = fopen(_PATH_RMOUNTLIST, "w")) == NULL) {
+			syslog(LOG_ERR,"can't update %s", _PATH_RMOUNTLIST);
+			return;
+		}
+		mlp = current_mounts;
+		while (mlp) {
+			fprintf(mlfile, "%s %s %s\n", mlp->ml_host, mlp->ml_exp, mlp->ml_real);
+			mlp = mlp->ml_next;
+		}
+		fclose(mlfile);
+	}
 }
 
 /*
@@ -149,7 +200,7 @@ xdr_mlist(XDR *xdrsp, caddr_t cp __unused)
 		strp = &mlp->ml_host[0];
 		if (!xdr_string(xdrsp, &strp, MNTNAMLEN))
 			return (0);
-		strp = &mlp->ml_dirp[0];
+		strp = &mlp->ml_real[0];
 		if (!xdr_string(xdrsp, &strp, MNTPATHLEN))
 			return (0);
 		mlp = mlp->ml_next;
@@ -198,16 +249,6 @@ xdr_fhs(XDR *xdrsp, caddr_t cp)
 	return (0);
 }
 
-void
-init_rpc(void)
-{
-	int maxrec = RPC_MAXDATASIZE;
-	rpcb_unset(MOUNTPROG, MOUNTVERS, NULL);
-	rpcb_unset(MOUNTPROG, MOUNTVERS3, NULL);
-	rpc_control(RPC_SVC_CONNMAXREC_SET, &maxrec);
-	
-	return;
-}
 /*
  * The mount rpc service
  */
@@ -271,7 +312,7 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 		if (export == NULL) {
 			syslog(LOG_NOTICE, "Bad mount request from %s for %s",
 			       numerichost, rpcpath);
-			bad = EPERM;
+			bad = EACCES;
 			if (!svc_sendreply(transp, (xdrproc_t)xdr_long,
 					   (caddr_t)&bad))
 				syslog(LOG_ERR, "Can't send reply about bad mount request");
@@ -334,7 +375,7 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 				   (caddr_t)&fhr))
 			syslog(LOG_ERR, "Can't send fh reply");
 		// Need to add the mount to the current_mounts list
-		add_mount(dirpath, lookup_failed ? numerichost : host);
+		add_mount(rpcpath, dirpath, numerichost);
 		if (debug)
 			warnx("mount request for %s successful", dirpath);
 		if (server_config.dolog)
@@ -435,9 +476,8 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 			    "dump request succeeded from %s",
 			    numerichost);
 		return;
-#if 0
 	case MOUNTPROC_UMNT:
-		if (sport >= IPPORT_RESERVED && resvport_only) {
+		if (sport >= IPPORT_RESERVED && server_config.resvport_only) {
 			syslog(LOG_NOTICE,
 			    "umount request from %s from unprivileged port",
 			    numerichost);
@@ -450,17 +490,12 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 			svcerr_decode(transp);
 			return;
 		}
-		if (realpath(rpcpath, dirpath) == NULL) {
-			syslog(LOG_NOTICE, "umount request from %s "
-			    "for non existent path %s",
-			    numerichost, dirpath);
-		}
 		if (!svc_sendreply(transp, (xdrproc_t)xdr_void, (caddr_t)NULL))
 			syslog(LOG_ERR, "can't send reply");
 		if (!lookup_failed)
-			del_mlist(host, dirpath);
-		del_mlist(numerichost, dirpath);
-		if (dolog)
+			del_mount(host, rpcpath);
+		del_mount(numerichost, rpcpath);
+		if (server_config.dolog)
 			syslog(LOG_NOTICE,
 			    "umount request succeeded from %s for %s",
 			    numerichost, dirpath);
@@ -475,14 +510,13 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 		}
 		if (!svc_sendreply(transp, (xdrproc_t)xdr_void, (caddr_t)NULL))
 			syslog(LOG_ERR, "can't send reply");
-		if (!lookup_failed)
-			del_mlist(host, NULL);
-		del_mlist(numerichost, NULL);
-		if (dolog)
+		del_mount(numerichost, NULL);
+		if (server_config.dolog)
 			syslog(LOG_NOTICE,
 			    "umountall request succeeded from %s",
 			    numerichost);
 		return;
+#if 0
 	case MOUNTPROC_EXPORT:
 		if (!svc_sendreply(transp, (xdrproc_t)xdr_explist, (caddr_t)NULL))
 			if (!svc_sendreply(transp, (xdrproc_t)xdr_explist_brief,
@@ -498,4 +532,375 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 		svcerr_noproc(transp);
 		return;
 	}
+}
+/*
+ * This routine creates and binds sockets on the appropriate
+ * addresses. It gets called one time for each transport.
+ * It returns 0 upon success, 1 for ingore the call and -1 to indicate
+ * bind failed with EADDRINUSE.
+ * Any file descriptors that have been created are stored in sock_fd and
+ * the total count of them is maintained in sock_fdcnt.
+ */
+static int
+create_service(struct netconfig *nconf)
+{
+	struct addrinfo hints, *res = NULL;
+	struct sockaddr_in *sin;
+	struct sockaddr_in6 *sin6;
+	struct __rpc_sockinfo si;
+	int aicode;
+	int fd;
+	int nhostsbak;
+	int one = 1;
+	int r;
+	u_int32_t host_addr[4];  /* IPv4 or IPv6 */
+	int mallocd_res;
+	char *bind_host;
+//	char **hosts = server_config.bind_addrs;
+	
+	if ((nconf->nc_semantics != NC_TPI_CLTS) &&
+	    (nconf->nc_semantics != NC_TPI_COTS) &&
+	    (nconf->nc_semantics != NC_TPI_COTS_ORD))
+		return (1);	/* not my type */
+
+	/*
+	 * XXX - using RPC library internal functions.
+	 */
+	if (!__rpc_nconf2sockinfo(nconf, &si)) {
+		syslog(LOG_ERR, "cannot get information for %s",
+		    nconf->nc_netid);
+		return (1);
+	}
+
+	/* Get mountd's address on this transport */
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = si.si_af;
+	hints.ai_socktype = si.si_socktype;
+	hints.ai_protocol = si.si_proto;
+
+	/*
+	 * Bind to specific IPs if asked to
+	 */
+	nhostsbak = 1;
+	while (nhostsbak > 0) {
+		--nhostsbak;
+		sock_fd = realloc(sock_fd, (sock_fdcnt + 1) * sizeof(int));
+		if (sock_fd == NULL)
+			out_of_mem();
+		sock_fd[sock_fdcnt++] = -1;	/* Set invalid for now. */
+		mallocd_res = 0;
+
+		hints.ai_flags = AI_PASSIVE;
+
+		/*	
+		 * XXX - using RPC library internal functions.
+		 */
+		if ((fd = __rpc_nconf2fd(nconf)) < 0) {
+			int non_fatal = 0;
+	    		if (errno == EAFNOSUPPORT &&
+			    nconf->nc_semantics != NC_TPI_CLTS) 
+				non_fatal = 1;
+				
+			syslog(non_fatal ? LOG_DEBUG : LOG_ERR, 
+			    "cannot create socket for %s", nconf->nc_netid);
+			if (non_fatal != 0)
+				continue;
+			exit(1);
+		}
+
+		switch (hints.ai_family) {
+		case AF_INET:
+			if (inet_pton(AF_INET, hosts[nhostsbak],
+			    host_addr) == 1) {
+				hints.ai_flags |= AI_NUMERICHOST;
+			} else {
+				/*
+				 * Skip if we have an AF_INET6 address.
+				 */
+				if (inet_pton(AF_INET6, hosts[nhostsbak],
+				    host_addr) == 1) {
+					close(fd);
+					continue;
+				}
+			}
+			break;
+		case AF_INET6:
+			if (inet_pton(AF_INET6, hosts[nhostsbak],
+			    host_addr) == 1) {
+				hints.ai_flags |= AI_NUMERICHOST;
+			} else {
+				/*
+				 * Skip if we have an AF_INET address.
+				 */
+				if (inet_pton(AF_INET, hosts[nhostsbak],
+				    host_addr) == 1) {
+					close(fd);
+					continue;
+				}
+			}
+
+			/*
+			 * We're doing host-based access checks here, so don't
+			 * allow v4-in-v6 to confuse things. The kernel will
+			 * disable it by default on NFS sockets too.
+			 */
+			if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one,
+			    sizeof one) < 0) {
+				syslog(LOG_ERR,
+				    "can't disable v4-in-v6 on IPv6 socket");
+				exit(1);
+			}
+			break;
+		default:
+			break;
+		}
+
+		/*
+		 * If no hosts were specified, just bind to INADDR_ANY
+		 */
+		if (strcmp("*", hosts[nhostsbak]) == 0) {
+			if (svcport_str == NULL) {
+				res = malloc(sizeof(struct addrinfo));
+				if (res == NULL) 
+					out_of_mem();
+				mallocd_res = 1;
+				res->ai_flags = hints.ai_flags;
+				res->ai_family = hints.ai_family;
+				res->ai_protocol = hints.ai_protocol;
+				switch (res->ai_family) {
+				case AF_INET:
+					sin = malloc(sizeof(struct sockaddr_in));
+					if (sin == NULL) 
+						out_of_mem();
+					sin->sin_family = AF_INET;
+					sin->sin_port = htons(0);
+					sin->sin_addr.s_addr = htonl(INADDR_ANY);
+					res->ai_addr = (struct sockaddr*) sin;
+					res->ai_addrlen = (socklen_t)
+					    sizeof(struct sockaddr_in);
+					break;
+				case AF_INET6:
+					sin6 = malloc(sizeof(struct sockaddr_in6));
+					if (sin6 == NULL)
+						out_of_mem();
+					sin6->sin6_family = AF_INET6;
+					sin6->sin6_port = htons(0);
+					sin6->sin6_addr = in6addr_any;
+					res->ai_addr = (struct sockaddr*) sin6;
+					res->ai_addrlen = (socklen_t)
+					    sizeof(struct sockaddr_in6);
+					break;
+				default:
+					syslog(LOG_ERR, "bad addr fam %d",
+					    res->ai_family);
+					exit(1);
+				}
+			} else { 
+				if ((aicode = getaddrinfo(NULL, svcport_str,
+				    &hints, &res)) != 0) {
+					syslog(LOG_ERR,
+					    "cannot get local address for %s: %s",
+					    nconf->nc_netid,
+					    gai_strerror(aicode));
+					close(fd);
+					continue;
+				}
+			}
+		} else {
+			if ((aicode = getaddrinfo(hosts[nhostsbak], svcport_str,
+			    &hints, &res)) != 0) {
+				syslog(LOG_ERR,
+				    "cannot get local address for %s: %s",
+				    nconf->nc_netid, gai_strerror(aicode));
+				close(fd);
+				continue;
+			}
+		}
+
+		/* Store the fd. */
+		sock_fd[sock_fdcnt - 1] = fd;
+
+		/* Now, attempt the bind. */
+		r = bindresvport_sa(fd, res->ai_addr);
+		if (r != 0) {
+			if (errno == EADDRINUSE && mallocd_svcport != 0) {
+				if (mallocd_res != 0) {
+					free(res->ai_addr);
+					free(res);
+				} else
+					freeaddrinfo(res);
+				return (-1);
+			}
+			syslog(LOG_ERR, "bindresvport_sa: %m");
+			exit(1);
+		}
+
+		if (svcport_str == NULL) {
+			svcport_str = malloc(NI_MAXSERV * sizeof(char));
+			if (svcport_str == NULL)
+				out_of_mem();
+			mallocd_svcport = 1;
+
+			if (getnameinfo(res->ai_addr,
+			    res->ai_addr->sa_len, NULL, NI_MAXHOST,
+			    svcport_str, NI_MAXSERV * sizeof(char),
+			    NI_NUMERICHOST | NI_NUMERICSERV))
+				errx(1, "Cannot get port number");
+		}
+		if (mallocd_res != 0) {
+			free(res->ai_addr);
+			free(res);
+		} else
+			freeaddrinfo(res);
+		res = NULL;
+	}
+	return (0);
+}
+
+/*
+ * Called after all the create_service() calls have succeeded, to complete
+ * the setup and registration.
+ */
+static void
+complete_service(struct netconfig *nconf, char *port_str)
+{
+	struct addrinfo hints, *res = NULL;
+	struct __rpc_sockinfo si;
+	struct netbuf servaddr;
+	SVCXPRT	*transp = NULL;
+	int aicode, fd, nhostsbak;
+	int registered = 0;
+
+	printf("WOOHOO\n");
+	if ((nconf->nc_semantics != NC_TPI_CLTS) &&
+	    (nconf->nc_semantics != NC_TPI_COTS) &&
+	    (nconf->nc_semantics != NC_TPI_COTS_ORD))
+		return;	/* not my type */
+
+	/*
+	 * XXX - using RPC library internal functions.
+	 */
+	if (!__rpc_nconf2sockinfo(nconf, &si)) {
+		syslog(LOG_ERR, "cannot get information for %s",
+		    nconf->nc_netid);
+		return;
+	}
+
+	nhostsbak = nhosts;
+	while (nhostsbak > 0) {
+		--nhostsbak;
+		if (sock_fdpos >= sock_fdcnt) {
+			/* Should never happen. */
+			syslog(LOG_ERR, "Ran out of socket fd's");
+			return;
+		}
+		fd = sock_fd[sock_fdpos++];
+		if (fd < 0)
+			continue;
+
+		if (nconf->nc_semantics != NC_TPI_CLTS)
+			listen(fd, SOMAXCONN);
+
+		if (nconf->nc_semantics == NC_TPI_CLTS )
+			transp = svc_dg_create(fd, 0, 0);
+		else 
+			transp = svc_vc_create(fd, RPC_MAXDATASIZE,
+			    RPC_MAXDATASIZE);
+
+		if (transp != (SVCXPRT *) NULL) {
+			if (!svc_reg(transp, MOUNTPROG, MOUNTVERS, mntsrv,
+			    NULL)) 
+				syslog(LOG_ERR,
+				    "can't register %s MOUNTVERS service",
+				    nconf->nc_netid);
+			if (!server_config.force_v2) {
+				if (!svc_reg(transp, MOUNTPROG, MOUNTVERS3,
+				    mntsrv, NULL)) 
+					syslog(LOG_ERR,
+					    "can't register %s MOUNTVERS3 service",
+					    nconf->nc_netid);
+			}
+		} else 
+			syslog(LOG_WARNING, "can't create %s services",
+			    nconf->nc_netid);
+
+		warnx("port_str = %s", port_str);
+		if (registered == 0) {
+			registered = 1;
+			memset(&hints, 0, sizeof hints);
+			hints.ai_flags = AI_PASSIVE;
+			hints.ai_family = si.si_af;
+			hints.ai_socktype = si.si_socktype;
+			hints.ai_protocol = si.si_proto;
+
+			if ((aicode = getaddrinfo(NULL, port_str, &hints,
+			    &res)) != 0) {
+				syslog(LOG_ERR, "cannot get local address: %s",
+				    gai_strerror(aicode));
+				exit(1);
+			}
+
+			servaddr.buf = malloc(res->ai_addrlen);
+			memcpy(servaddr.buf, res->ai_addr, res->ai_addrlen);
+			servaddr.len = res->ai_addrlen;
+
+			rpcb_set(MOUNTPROG, MOUNTVERS, nconf, &servaddr);
+			rpcb_set(MOUNTPROG, MOUNTVERS3, nconf, &servaddr);
+
+			xcreated++;
+			freeaddrinfo(res);
+		}
+	} /* end while */
+}
+
+/*
+ * Clear out sockets after a failure to bind one of them, so that the
+ * cycle of socket creation/binding can start anew.
+ */
+static void
+clearout_service(void)
+{
+	int i;
+
+	for (i = 0; i < sock_fdcnt; i++) {
+		if (sock_fd[i] >= 0) {
+			shutdown(sock_fd[i], SHUT_RDWR);
+			close(sock_fd[i]);
+		}
+	}
+}
+void
+init_rpc(void)
+{
+	int maxrec = RPC_MAXDATASIZE;
+	void *nc_handle;
+	struct netconfig *nconf;
+	
+	rpcb_unset(MOUNTPROG, MOUNTVERS, NULL);
+	rpcb_unset(MOUNTPROG, MOUNTVERS3, NULL);
+	rpc_control(RPC_SVC_CONNMAXREC_SET, &maxrec);
+
+	if (server_config.resvport_only == 0) {
+		sysctlbyname("vfs.nfsrv.nfs_privport", NULL, NULL,
+			     &server_config.resvport_only,
+			     sizeof(server_config.resvport_only));
+	}
+
+	nc_handle = setnetconfig();
+	while ((nconf = getnetconfig(nc_handle)) != NULL) {
+		if (nconf->nc_flag & NC_VISIBLE) {
+			int ret;
+			
+			if (server_config.have_v6 == 0 &&
+			    strcmp(nconf->nc_protofmly, "inet6") == 0)
+				continue;
+			ret = create_service(nconf);
+			warnx("ret = %d, svcport_str = %s", ret, svcport_str);
+			if (ret == 0) {
+				complete_service(nconf, svcport_str);
+			}
+		}
+	}
+	svc_run();
+	return;
 }

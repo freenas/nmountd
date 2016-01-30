@@ -61,6 +61,9 @@ struct server_config {
 	int dir_only;
 	int dolog;
 	int have_v6;
+	in_port_t bind_port;
+	size_t naddrs;
+	char **bind_addrs;
 };
 
 /*

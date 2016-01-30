@@ -51,6 +51,8 @@ Find(const char *arg)
 	return retval;
 }
 
+extern void init_rpc(void);
+
 int
 main(int ac, char **av)
 {
@@ -112,6 +114,7 @@ main(int ac, char **av)
 			printf("Could not find appropriate export\n");
 	}
 	ExportFilesystems();
+	init_rpc();
 	UnexportFilesystems();
 	return 0;
 }
