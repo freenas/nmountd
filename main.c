@@ -12,6 +12,7 @@ int verbose = 0;
 struct server_config server_config = {
 	.resvport_only = 1,
 	.dir_only = 1,
+	.have_v6 = 0,
 };
 
 static void

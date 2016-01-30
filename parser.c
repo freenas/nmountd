@@ -368,6 +368,7 @@ parse_opts(char *line, int *opts, struct export_args *args)
 			optarg = opt;
 			opt = strsep_quote(&optarg, "=");
 		}
+		// sigh.  THis is wrong.  It snarfs up -network
 		for (optptr = export_options; optptr->name; optptr++) {
 			if (strcmp(opt, optptr->name) == 0) {
 				found = 1;

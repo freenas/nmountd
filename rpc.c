@@ -362,6 +362,7 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 		fhr.fhr_secflavors = export->args.ex_secflavors;
 		fhr.fhr_vers = rqstp->rq_vers;
 		/* Get the file handle */
+		warnx("dirpath = %s", dirpath);
 		if (getfh(dirpath, (fhandle_t*)&fhr.fhr_fh) < 0) {
 			bad = errno;
 			syslog(LOG_ERR, "can't get fh for %s", dirpath);
@@ -371,9 +372,12 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 			sigprocmask(SIG_UNBLOCK, &sighup_mask, NULL);
 			return;
 		}
+		warnx("Got fhandle for %s", dirpath);
 		if (!svc_sendreply(transp, (xdrproc_t)xdr_fhs,
-				   (caddr_t)&fhr))
+				   (caddr_t)&fhr)) {
+			warn("Could not send fh reply");
 			syslog(LOG_ERR, "Can't send fh reply");
+		}
 		// Need to add the mount to the current_mounts list
 		add_mount(rpcpath, dirpath, numerichost);
 		if (debug)
@@ -477,6 +481,7 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 			    numerichost);
 		return;
 	case MOUNTPROC_UMNT:
+		warnx("umount request");
 		if (sport >= IPPORT_RESERVED && server_config.resvport_only) {
 			syslog(LOG_NOTICE,
 			    "umount request from %s from unprivileged port",
@@ -492,8 +497,6 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 		}
 		if (!svc_sendreply(transp, (xdrproc_t)xdr_void, (caddr_t)NULL))
 			syslog(LOG_ERR, "can't send reply");
-		if (!lookup_failed)
-			del_mount(host, rpcpath);
 		del_mount(numerichost, rpcpath);
 		if (server_config.dolog)
 			syslog(LOG_NOTICE,
@@ -901,6 +904,24 @@ init_rpc(void)
 			}
 		}
 	}
-	svc_run();
+	printf("Foo\n");
+	while (1) {
+		fd_set readfds;
+		readfds = svc_fdset;
+
+		printf("Calling select\n");
+		switch (select(/*svc_maxfd + 1*/ 32, &readfds, NULL, NULL, NULL)) {
+		case -1:
+			warn("select");
+			continue;
+		case 0:
+			warnx("select returnd 0");
+			continue;
+		default:
+			warnx("Calling getreqset");
+			svc_getreqset(&readfds);
+		}
+	}
+//	svc_run();
 	return;
 }
