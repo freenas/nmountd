@@ -63,11 +63,14 @@ add_bind_addr(const char *ip)
 {
 	char **tarray;
 
-	if (strcmp(ip, "*") == 0 ||
-	    strcmp(ip, "127.0.0.1") == 0 ||
-	    strcmp(ip, "::1") == 0 ||
-	    strcmp(ip, "localhost") == 0) {
-		// All forms of localhost
+	/*
+	 * Don't bother with redundant localhosts after the first one.
+	 */
+	if (server_config.bind_addrs &&
+	    (strcmp(ip, "*") == 0 ||
+	     strcmp(ip, "127.0.0.1") == 0 ||
+	     strcmp(ip, "::1") == 0 ||
+	     strcmp(ip, "localhost") == 0)) {
 		return;
 	}
 	tarray = realloc(server_config.bind_addrs, sizeof(char**) * (server_config.naddrs + 1));
@@ -75,7 +78,6 @@ add_bind_addr(const char *ip)
 		out_of_mem();
 	}
 	server_config.bind_addrs = tarray;
-	// This isn't quite right, need to make sure it's a valid host/address
 	server_config.bind_addrs[server_config.naddrs++] = strdup(ip);
 	return;
 }
@@ -120,7 +122,6 @@ main(int ac, char **av)
 		ef_count = ac;
 	}
 
-	UnexportFilesystems();
 	for (indx = 0; indx < ef_count; indx++) {
 		char *exp_file = export_files[indx];
 		FILE *fp = fopen(exp_file, "r");
@@ -147,6 +148,8 @@ main(int ac, char **av)
 		return 0;
 	}
 
+	// Does this need to happen on SIGHUP?
+	UnexportFilesystems();
 	ExportFilesystems();
 	init_rpc();
 	UnexportFilesystems();

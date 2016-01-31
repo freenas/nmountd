@@ -70,10 +70,6 @@ static const char copyright[] =
 
 #include "mountd.h"
 
-char *hosts[] = {
-	"*",
-};
-int nhosts = 1;
 char *svcport_str;
 int *sock_fd;
 size_t sock_fdcnt;
@@ -559,7 +555,7 @@ create_service(struct netconfig *nconf)
 	u_int32_t host_addr[4];  /* IPv4 or IPv6 */
 	int mallocd_res;
 	char *bind_host;
-//	char **hosts = server_config.bind_addrs;
+	char **hosts = server_config.bind_addrs;
 	
 	if ((nconf->nc_semantics != NC_TPI_CLTS) &&
 	    (nconf->nc_semantics != NC_TPI_COTS) &&
@@ -584,7 +580,7 @@ create_service(struct netconfig *nconf)
 	/*
 	 * Bind to specific IPs if asked to
 	 */
-	nhostsbak = 1;
+	nhostsbak = server_config.naddrs;
 	while (nhostsbak > 0) {
 		--nhostsbak;
 		sock_fd = realloc(sock_fd, (sock_fdcnt + 1) * sizeof(int));
@@ -789,7 +785,8 @@ complete_service(struct netconfig *nconf, char *port_str)
 		return;
 	}
 
-	nhostsbak = nhosts;
+	nhostsbak = server_config.naddrs;
+	fprintf(stderr, "%s(%d):  nhostbak = %d\n", __FUNCTION__, __LINE__, nhostsbak);
 	while (nhostsbak > 0) {
 		--nhostsbak;
 		if (sock_fdpos >= sock_fdcnt) {
