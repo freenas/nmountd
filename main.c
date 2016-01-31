@@ -10,6 +10,9 @@
 
 int debug = 0;
 int verbose = 0;
+static char *default_export = _PATH_EXPORTS;
+static char **default_exports = &default_export;
+
 struct server_config server_config = {
 	.resvport_only = 1,
 	.dir_only = 1,
@@ -55,21 +58,41 @@ Find(const char *arg)
 
 extern void init_rpc(void);
 
+static void
+add_bind_addr(const char *ip)
+{
+	char **tarray;
+
+	if (strcmp(ip, "*") == 0 ||
+	    strcmp(ip, "127.0.0.1") == 0 ||
+	    strcmp(ip, "::1") == 0 ||
+	    strcmp(ip, "localhost") == 0) {
+		// All forms of localhost
+		return;
+	}
+	tarray = realloc(server_config.bind_addrs, sizeof(char**) * (server_config.naddrs + 1));
+	if (tarray == NULL) {
+		out_of_mem();
+	}
+	server_config.bind_addrs = tarray;
+	// This isn't quite right, need to make sure it's a valid host/address
+	server_config.bind_addrs[server_config.naddrs++] = strdup(ip);
+	return;
+}
+
 int
 main(int ac, char **av)
 {
-	char *exp_file = "/etc/exports";
-	char *line;
 	int c;
 	struct Find *findit = NULL;
 	char **export_files = NULL;
 	size_t ef_count = 0;
 	size_t indx;
-	static char *default_export = _PATH_EXPORTS;
-	static char **default_exports = &default_export;
 	
 	
-	while ((c = getopt(ac, av, "2nrdvlF:")) != -1) {
+	add_bind_addr("*");
+	
+	while ((c = getopt(ac, av, "2nrdvlF:h:")) != -1) {
 		switch (c) {
 		case '2':	server_config.force_v2 = 1; break;
 		case 'n':	server_config.resvport_only = 0; break;
@@ -78,6 +101,7 @@ main(int ac, char **av)
 		case 'd':	debug++; break;
 		case 'v':	verbose++; break;
 		case 'F':	findit = Find(optarg); break;
+		case 'h':	add_bind_addr(optarg); break;
 		default:	usage(av[0]);
 		}
 	}
@@ -91,7 +115,6 @@ main(int ac, char **av)
 	if (ac == 0) {
 		export_files = default_exports;
 		ef_count = 1;
-
 	} else {
 		export_files = av;
 		ef_count = ac;
@@ -99,7 +122,7 @@ main(int ac, char **av)
 
 	UnexportFilesystems();
 	for (indx = 0; indx < ef_count; indx++) {
-		exp_file = export_files[indx];
+		char *exp_file = export_files[indx];
 		FILE *fp = fopen(exp_file, "r");
 		if (fp == NULL) {
 			warn("Could not open %s", exp_file);
@@ -123,6 +146,7 @@ main(int ac, char **av)
 		ReleaseTree();
 		return 0;
 	}
+
 	ExportFilesystems();
 	init_rpc();
 	UnexportFilesystems();

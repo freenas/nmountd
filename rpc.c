@@ -904,13 +904,14 @@ init_rpc(void)
 			}
 		}
 	}
-	printf("Foo\n");
+
 	while (1) {
 		fd_set readfds;
 		readfds = svc_fdset;
 
-		printf("Calling select\n");
-		switch (select(/*svc_maxfd + 1*/ 32, &readfds, NULL, NULL, NULL)) {
+		if (debug && verbose)
+			fprintf(stderr, "Calling select, svc_maxfd = %d\n", svc_maxfd);
+		switch (select(svc_maxfd + 1, &readfds, NULL, NULL, NULL)) {
 		case -1:
 			warn("select");
 			continue;
