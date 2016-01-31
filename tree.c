@@ -49,10 +49,19 @@ static void
 FreeExportEntry(struct export_entry *entry)
 {
 	if (entry) {
+		size_t indx;
+		
 		if (entry->export_path)
 			free(entry->export_path);
 		if (entry->args.ex_indexfile)
 			free(entry->args.ex_indexfile);
+		for (indx = 0; indx < entry->network_count; indx++) {
+			struct network_entry *nep = &entry->entries[indx];
+			if (nep->network)
+				free(nep->network);
+			if (nep->mask)
+				free(nep->mask);
+		}
 		free(entry);
 	}
 	return;
