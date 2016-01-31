@@ -76,9 +76,23 @@ FreeExportNode(struct export_node *node)
 	return;
 }
 
+static void
+FreeTree(struct export_tree *tree)
+{
+	if (tree) {
+		if (tree->node) {
+			FreeExportNode(tree->node);
+		}
+		FreeTree(tree->left);
+		FreeTree(tree->right);
+		free(tree);
+	}
+}
+
 void
 ReleaseTree(void)
 {
+	FreeTree(root);
 	return;
 }
 

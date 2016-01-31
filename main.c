@@ -120,6 +120,8 @@ main(int ac, char **av)
 			printf("export_name = %s, real path = %s\n", export_name, ep->export_path);
 		else
 			printf("Could not find appropriate export\n");
+		ReleaseTree();
+		return 0;
 	}
 	ExportFilesystems();
 	init_rpc();
