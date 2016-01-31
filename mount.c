@@ -64,7 +64,7 @@ UnexportFilesystems(void)
 	struct iovec *iov = NULL;
 	struct xvfsconf vfc;
 	char errmsg[255];
-	int iovlen;
+	int iovlen = 0;
 	int mount_count;
 	size_t indx;
 	
@@ -148,35 +148,30 @@ ExportFilesystems(void)
 			build_iovec(&iov, &iovlen, "update", NULL, 0);
 			build_iovec(&iov, &iovlen, "export", &export, sizeof(export));
 			build_iovec(&iov, &iovlen, "errmsg", errmsg, sizeof(errmsg));
-
-			fprintf(stderr, "%s(%d)\n", __FUNCTION__, __LINE__);
+			
 			fprintf(stderr, "\texp->export_count = %zd\n", exp->export_count);
 			for (entry = 0; entry < exp->export_count; entry++) {
 				struct export_entry *ep = exp->exports[entry];
 				struct statfs sfs;
 				size_t net_entry;
 				char *real_path;
-
-			fprintf(stderr, "%s(%d)\n", __FUNCTION__, __LINE__);
+				
 				real_path = realpath(ep->export_path, NULL);
 				if (real_path == NULL) {
 					warn("Could not export %s -- not a real path", ep->export_path);
 					continue;
 				}
-			fprintf(stderr, "%s(%d)\n", __FUNCTION__, __LINE__);
 				if (statfs(real_path, &sfs) == -1) {
 					warn("Could not find %s (really %s), cannot export", real_path, ep->export_path);
 					free(real_path);
 					continue;
 				}
-			fprintf(stderr, "%s(%d)\n", __FUNCTION__, __LINE__);
 				if ((ep->export_flags & OPT_ALLDIRS) == 0 &&
 				    strcmp(real_path, sfs.f_mntonname) != 0) {
 					warn("-alldirs specified, but %s is not a mount point", ep->export_path);
 					free(real_path);
 					continue;
 				}
-			fprintf(stderr, "%s(%d)\n", __FUNCTION__, __LINE__);
 #define SET_STR(iov, str) do {						\
 					(iov).iov_base = str;		\
 					(iov).iov_len = strlen(str) + 1; \
@@ -192,8 +187,7 @@ ExportFilesystems(void)
 				PRINTIOV(iov, 0);
 				PRINTIOV(iov, 2);
 				PRINTIOV(iov, 4);
-					
-			fprintf(stderr, "%s(%d)\n", __FUNCTION__, __LINE__);
+				
 				for (net_entry = 0; net_entry < ep->network_count; net_entry++) {
 					export = ep->args;
 					export.ex_addr = ep->entries[net_entry].network;
@@ -226,6 +220,20 @@ ExportFilesystems(void)
 						warn("Cannot export %s: %s", sfs.f_mntonname, errmsg);
 					}
 				}
+				if (exp->default_export.export_path) {
+					// Export the default entry
+					export = exp->default_export.args;
+					export.ex_flags |= MNT_EXPORTED;
+					export.ex_addr = export.ex_mask = NULL;
+					export.ex_addrlen = export.ex_masklen = 0;
+					if (debug) {
+						warnx("About to default export %s", sfs.f_mntonname);
+					}
+					errmsg[0] = 0;
+					if (nmount(iov, iovlen, sfs.f_flags) == -1) {
+						warn("Cannot defaul texport %s: %s", sfs.f_mntonname, errmsg);
+					}
+				}
 			}
 			free(iov[0].iov_base); // fstype
 			free(iov[2].iov_base); // fspath
@@ -234,7 +242,7 @@ ExportFilesystems(void)
 			free(iov[8].iov_base); // export
 			free(iov[10].iov_base); // errmsg
 			free(iov);
-
+			
 			return 0;
 		});
 }
