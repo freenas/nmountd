@@ -157,8 +157,12 @@ main(int ac, char **av)
 
 	load_exports(export_files, ef_count);
 	
-	if (verbose)
-		PrintTree();
+	if (verbose) {
+		if (debug)
+			PrintTree();
+		else
+			ListExports();
+	}
 
 	if (findit) {
 		struct export_entry *ep;

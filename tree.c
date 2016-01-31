@@ -510,3 +510,39 @@ AddEntryToTree(const char *name, struct export_entry *entry)
 done:
 	return rv;
 }
+
+void
+ListExports(void)
+{
+	// Iterate over the tree
+	IterateTree(^(struct export_node *node) {
+			size_t indx;
+			if (node->default_export.export_path) {
+				printf("%s=%s\tEveryone\n", node->default_export.export_path, node->export_name);
+			}
+			for (indx = 0; indx < node->export_count; indx++) {
+				struct export_entry *ep = node->exports[indx];
+				if (ep->network_count > 0) {
+					size_t net_indx;
+					printf("%s=%s", ep->export_path, node->export_name);
+					for (net_indx = 0; net_indx < ep->network_count; net_indx++) {
+						struct network_entry *np = &ep->entries[net_indx];
+						struct sockaddr *sap = np->network;
+						char host[255];
+						if (getnameinfo(sap, sap->sa_len,
+							       host, sizeof(host),
+							       NULL, 0, NI_NUMERICHOST) == -1) {
+							strcpy("<unknown>", host);
+						}
+						printf(" %s", host);
+						if (np->mask) {
+							printf("/%d", netmask_to_masklen(np->mask));
+						}
+					}
+					printf("\n");
+				}
+			}
+			return 0;
+		});
+	return;
+}

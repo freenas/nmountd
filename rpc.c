@@ -181,7 +181,151 @@ xdr_dir(XDR *xdrsp, char *dirp)
 	return (xdr_string(xdrsp, &dirp, MNTPATHLEN));
 }
 
-int
+static int
+xdr_explist_common(XDR *xdrsp, caddr_t cp __unused, int brief)
+{
+	sigset_t sighup_mask;
+	int true = 1;
+	int false = 0;
+
+	sigemptyset(&sighup_mask);
+	sigaddset(&sighup_mask, SIGHUP);
+	sigprocmask(SIG_BLOCK, &sighup_mask, NULL);
+
+
+	/*
+	 * protocol seems to be:
+	 * <true><mount>[(<true><address>)*]<false>
+	 */
+	IterateTree(^(struct export_node *ep) {
+			char *strp;
+			size_t indx;
+			int true = 1, false = 0;
+			
+			// Handle default first
+			if (ep->default_export.export_path) {
+				struct export_entry *ed = &ep->default_export;
+				if (debug)
+					fprintf(stderr, "Sending default true\n");
+				if (!xdr_bool(xdrsp, &true))
+					return (1);
+				if (strcmp(ep->export_name, ed->export_path) == 0) {
+					strp = strdup(ep->export_name);
+				} else {
+					asprintf(&strp, "%s=%s", ed->export_path, ep->export_name);
+				}
+				if (debug) {
+					fprintf(stderr, "Sending default export %s\n", strp);
+				}
+				if (!xdr_string(xdrsp, &strp, strlen(strp) + 1)) {
+					free(strp);
+					return (1);
+				}
+				free(strp);
+				if (debug)
+					fprintf(stderr, "Sending default false\n");
+				if (!xdr_bool(xdrsp, &false))
+					return (1);
+			}
+			// Now go through all of the exports
+			for (indx = 0; indx < ep->export_count; indx++) {
+				struct export_entry *exp = ep->exports[indx];
+				size_t network_indx;
+				size_t max_len;
+				
+				if (debug)
+					fprintf(stderr, "sending entry true\n");
+				if (!xdr_bool(xdrsp, &true))
+					return (1);
+
+				if (strcmp(ep->export_name,
+					   exp->export_path) == 0) {
+					strp = strdup(ep->export_name);
+				} else {
+					asprintf(&strp, "%s=%s", exp->export_path, ep->export_name);
+				}
+				max_len = strlen(strp) + 1;
+				if (debug)
+					fprintf(stderr, "Sending export list entry %s", strp);
+				
+				if (!xdr_string(xdrsp, &strp, max_len)) {
+					free(strp);
+					return (1);
+				}
+				free(strp);
+				
+				if (debug)
+					fprintf(stderr, "<true>");
+				if (!xdr_bool(xdrsp, &true))
+					return (1);
+
+				if (brief) {
+					strp = "(...)";
+					if (debug)
+						fprintf(stderr, " %s", strp);
+					if (!xdr_string(xdrsp, &strp, strlen(strp) + 1))
+						return (1);
+				} else {
+					for (network_indx = 0;
+					     network_indx < exp->network_count;
+					     network_indx++) {
+						struct network_entry *np = &exp->entries[network_indx];
+						char host[255];
+						struct sockaddr *sap = np->network;
+
+						if (np->mask == NULL) {
+							// A host
+							if (getnameinfo(sap, sap->sa_len, host, sizeof(host),
+									NULL, 0, 0) != 0) {
+								if (getnameinfo(sap, sap->sa_len, host, sizeof(host),
+										NULL, 0, NI_NUMERICHOST) != 0)
+									strcpy(host, "<unknown>");
+							}
+							strp = strdup(host);
+						} else {
+							if (getnameinfo(sap, sap->sa_len, host, sizeof(host),
+									NULL, 0, NI_NUMERICHOST) != 0)
+								strcpy(host, "<unknown>");
+							asprintf(&strp, "%s/%d", host, netmask_to_masklen(np->mask));
+						}
+						
+						if (debug)
+							fprintf(stderr, " %s", strp);
+						
+						if (!xdr_string(xdrsp, &strp, strlen(strp) + 1)) {
+							free(strp);
+							return (1);
+						}
+					}
+				}
+				if (debug)
+					fprintf(stderr, "<false>\n");
+				if (!xdr_bool(xdrsp, &false))
+					return (1);
+			}
+			return 0;
+		});
+	
+	sigprocmask(SIG_UNBLOCK, &sighup_mask, NULL);
+	if (debug)
+		fprintf(stderr, "Sending final false\n");
+	if (!xdr_bool(xdrsp, &false))
+		return (0);
+	return 1;
+}
+
+static int
+xdr_explist(XDR *xdrsp, caddr_t cp)
+{
+	return xdr_explist_common(xdrsp, cp, 0);
+}
+static int
+xdr_explist_brief(XDR *xdrsp, caddr_t cp)
+{
+	return xdr_explist_common(xdrsp, cp, 1);
+}
+
+static int
 xdr_mlist(XDR *xdrsp, caddr_t cp __unused)
 {
 	struct mountlist *mlp;
@@ -430,18 +574,16 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 			    "umountall request succeeded from %s",
 			    numerichost);
 		return;
-#if 0
 	case MOUNTPROC_EXPORT:
 		if (!svc_sendreply(transp, (xdrproc_t)xdr_explist, (caddr_t)NULL))
 			if (!svc_sendreply(transp, (xdrproc_t)xdr_explist_brief,
 			    (caddr_t)NULL))
 				syslog(LOG_ERR, "can't send reply");
-		if (dolog)
+		if (server_config.dolog)
 			syslog(LOG_NOTICE,
 			    "export request succeeded from %s",
 			    numerichost);
 		return;
-#endif
 	default:
 		svcerr_noproc(transp);
 		return;

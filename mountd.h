@@ -108,6 +108,7 @@ extern struct export_entry *CreateExportEntry(const char *,
 extern int AddEntryToTree(const char *, struct export_entry *);
 
 extern void PrintTree(void);
+extern void ListExports(void);
 
 extern void PrintExportEntry(struct export_entry *, const char *);
 
