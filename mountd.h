@@ -125,4 +125,9 @@ extern void read_export_file(FILE *);
 extern void UnexportFilesystems(void);
 extern void ExportFilesystems(void);
 
+// RPC support
+extern void init_rpc(void);
+extern void service_rpc(void);
+extern void stop_rpc(void);
+
 #endif /* _MOUNTD_H */

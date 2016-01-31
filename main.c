@@ -4,12 +4,15 @@
 #include <string.h>
 #include <err.h>
 #include <syslog.h>
+#include <signal.h>
 
 #include "mountd.h"
 #include "pathnames.h"
 
 int debug = 0;
 int verbose = 0;
+static sig_atomic_t got_sighup;
+
 static char *default_export = _PATH_EXPORTS;
 static char **default_exports = &default_export;
 
@@ -56,7 +59,18 @@ Find(const char *arg)
 	return retval;
 }
 
-extern void init_rpc(void);
+static void
+huphandler(int signo)
+{
+	got_sighup = 1;
+}
+
+static void
+terminate(int signo)
+{
+	stop_rpc();
+	exit(0);
+}
 
 static void
 add_bind_addr(const char *ip)
@@ -79,6 +93,24 @@ add_bind_addr(const char *ip)
 	}
 	server_config.bind_addrs = tarray;
 	server_config.bind_addrs[server_config.naddrs++] = strdup(ip);
+	return;
+}
+
+
+static void
+load_exports(char **files, size_t count)
+{
+	size_t indx;
+	
+	for (indx = 0; indx < count; indx++) {
+		char *exp_file = files[indx];
+		FILE *fp = fopen(exp_file, "r");
+		if (fp == NULL) {
+			warn("Could not open %s", exp_file);
+		}
+		read_export_file(fp);
+		fclose(fp);
+	}
 	return;
 }
 
@@ -122,15 +154,8 @@ main(int ac, char **av)
 		ef_count = ac;
 	}
 
-	for (indx = 0; indx < ef_count; indx++) {
-		char *exp_file = export_files[indx];
-		FILE *fp = fopen(exp_file, "r");
-		if (fp == NULL) {
-			warn("Could not open %s", exp_file);
-		}
-		read_export_file(fp);
-		fclose(fp);
-	}
+
+	load_exports(export_files, ef_count);
 	
 	if (verbose)
 		PrintTree();
@@ -148,11 +173,27 @@ main(int ac, char **av)
 		return 0;
 	}
 
-	// Does this need to happen on SIGHUP?
+	signal(SIGHUP, huphandler);
+	signal(SIGTERM, terminate);
+	signal(SIGPIPE, SIG_IGN);
+	// Need to ignore SIGINT and SIGQUIT
+	
+	// Does this need to re-happen on SIGHUP?
+	init_rpc();
+
 	UnexportFilesystems();
 	ExportFilesystems();
-	init_rpc();
-	UnexportFilesystems();
+
+	while (1) {
+		if (got_sighup) {
+			got_sighup = 0;
+			load_exports(export_files, ef_count);
+			UnexportFilesystems();
+			ExportFilesystems();
+		}
+		service_rpc();
+	}
+		UnexportFilesystems();
 	return 0;
 }
 

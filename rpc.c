@@ -383,91 +383,6 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 			       "mount request succeeded ffrom %s for %s",
 			       numerichost, dirpath);
 		return;
-#if 0
-		/*
-		 * Get the real pathname and make sure it is a directory
-		 * or a regular file if the -r option was specified
-		 * and it exists.
-		 */
-		if (realpath(rpcpath, dirpath) == NULL ||
-		    stat(dirpath, &stb) < 0 ||
-		    (!S_ISDIR(stb.st_mode) &&
-		    (server_config.dir_only || !S_ISREG(stb.st_mode))) ||
-		    statfs(dirpath, &fsb) < 0) {
-			chdir("/");	/* Just in case realpath doesn't */
-			syslog(LOG_NOTICE,
-			    "mount request from %s for non existent path %s",
-			    numerichost, dirpath);
-			if (debug)
-				warnx("stat failed on %s", dirpath);
-			bad = ENOENT;	/* We will send error reply later */
-		}
-
-		/* Check in the exports list */
-		sigprocmask(SIG_BLOCK, &sighup_mask, NULL);
-		ep = ex_search(&fsb.f_fsid);
-		hostset = defset = 0;
-		if (ep && (chk_host(ep->ex_defdir, saddr, &defset, &hostset,
-		    &numsecflavors, &secflavorsp) ||
-		    ((dp = dirp_search(ep->ex_dirl, dirpath)) &&
-		      chk_host(dp, saddr, &defset, &hostset, &numsecflavors,
-		       &secflavorsp)) ||
-		    (defset && scan_tree(ep->ex_defdir, saddr) == 0 &&
-		     scan_tree(ep->ex_dirl, saddr) == 0))) {
-			if (bad) {
-				if (!svc_sendreply(transp, (xdrproc_t)xdr_long,
-				    (caddr_t)&bad))
-					syslog(LOG_ERR, "can't send reply");
-				sigprocmask(SIG_UNBLOCK, &sighup_mask, NULL);
-				return;
-			}
-			if (hostset & DP_HOSTSET) {
-				fhr.fhr_flag = hostset;
-				fhr.fhr_numsecflavors = numsecflavors;
-				fhr.fhr_secflavors = secflavorsp;
-			} else {
-				fhr.fhr_flag = defset;
-				fhr.fhr_numsecflavors = ep->ex_defnumsecflavors;
-				fhr.fhr_secflavors = ep->ex_defsecflavors;
-			}
-			fhr.fhr_vers = rqstp->rq_vers;
-			/* Get the file handle */
-			memset(&fhr.fhr_fh, 0, sizeof(nfsfh_t));
-			if (getfh(dirpath, (fhandle_t *)&fhr.fhr_fh) < 0) {
-				bad = errno;
-				syslog(LOG_ERR, "can't get fh for %s", dirpath);
-				if (!svc_sendreply(transp, (xdrproc_t)xdr_long,
-				    (caddr_t)&bad))
-					syslog(LOG_ERR, "can't send reply");
-				sigprocmask(SIG_UNBLOCK, &sighup_mask, NULL);
-				return;
-			}
-			if (!svc_sendreply(transp, (xdrproc_t)xdr_fhs,
-			    (caddr_t)&fhr))
-				syslog(LOG_ERR, "can't send reply");
-			if (!lookup_failed)
-				add_mlist(host, dirpath);
-			else
-				add_mlist(numerichost, dirpath);
-			if (debug)
-				warnx("mount successful");
-			if (server_config.dolog)
-				syslog(LOG_NOTICE,
-				    "mount request succeeded from %s for %s",
-				    numerichost, dirpath);
-		} else {
-			bad = EACCES;
-			syslog(LOG_NOTICE,
-			    "mount request denied from %s for %s",
-			    numerichost, dirpath);
-		}
-
-		if (bad && !svc_sendreply(transp, (xdrproc_t)xdr_long,
-		    (caddr_t)&bad))
-			syslog(LOG_ERR, "can't send reply");
-		sigprocmask(SIG_UNBLOCK, &sighup_mask, NULL);
-		return;
-#endif
 	case MOUNTPROC_DUMP:
 		if (!svc_sendreply(transp, (xdrproc_t)xdr_mlist, (caddr_t)NULL))
 			syslog(LOG_ERR, "can't send reply");
@@ -822,9 +737,8 @@ complete_service(struct netconfig *nconf, char *port_str)
 			}
 		} else 
 			syslog(LOG_WARNING, "can't create %s services",
-			    nconf->nc_netid);
+			       nconf->nc_netid);
 
-		warnx("port_str = %s", port_str);
 		if (registered == 0) {
 			registered = 1;
 			memset(&hints, 0, sizeof hints);
@@ -902,24 +816,35 @@ init_rpc(void)
 		}
 	}
 
-	while (1) {
-		fd_set readfds;
-		readfds = svc_fdset;
+	return;
+}
 
-		if (debug && verbose)
-			fprintf(stderr, "Calling select, svc_maxfd = %d\n", svc_maxfd);
-		switch (select(svc_maxfd + 1, &readfds, NULL, NULL, NULL)) {
-		case -1:
-			warn("select");
-			continue;
-		case 0:
-			warnx("select returnd 0");
-			continue;
-		default:
+void
+service_rpc(void) {
+	fd_set readfds;
+	readfds = svc_fdset;
+	
+	if (debug && verbose)
+		fprintf(stderr, "Calling select, svc_maxfd = %d\n", svc_maxfd);
+	switch (select(svc_maxfd + 1, &readfds, NULL, NULL, NULL)) {
+	case -1:
+		warn("select");
+		break;
+	case 0:
+		warnx("select returnd 0");
+		break;
+	default:
+		if (debug)
 			warnx("Calling getreqset");
-			svc_getreqset(&readfds);
-		}
+		svc_getreqset(&readfds);
 	}
-//	svc_run();
+	return;
+}
+
+void
+stop_rpc(void)
+{
+	rpcb_unset(MOUNTPROG, MOUNTVERS, NULL);
+	rpcb_unset(MOUNTPROG, MOUNTVERS3, NULL);
 	return;
 }
