@@ -360,6 +360,9 @@ parse_opts(char *line, int *opts, struct export_args *args)
 		struct export_options *optptr = export_options;
 		int found = 0;
 		
+		if (strncmp(retval, "-net", 4) == 0 ||
+		    strncmp(retval, "-mask", 5) == 0)
+			break;
 		opt = strsep_quote(&retval, " \t\n");
 		if (opt == NULL)
 			break;
