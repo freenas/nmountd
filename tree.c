@@ -13,6 +13,8 @@
 #define NODE_SIZE(node) (sizeof(struct export_node) + ((node)->export_count * sizeof(struct export_entry*)))
 #define ENTRY_SIZE(entry) (sizeof(struct export_entry) + ((entry)->network_count * sizeof(struct network_entry)))
 
+static struct export_tree *root;
+
 /*
  * Create an export entry; this will be used to
  * help populate the node for the export path.
@@ -43,18 +45,12 @@ CreateExportEntry(const char *path,
  * Release the memory for an export entry.
  * Only the indexfile (if set) in export_args is released.
  */
-void
+static void
 FreeExportEntry(struct export_entry *entry)
 {
 	if (entry) {
 		if (entry->export_path)
 			free(entry->export_path);
-#if 0
-		if (entry->args.ex_addr)
-			free(entry->args.ex_addr);
-		if (entry->args.ex_mask)
-			free(entry->args.ex_mask);
-#endif
 		if (entry->args.ex_indexfile)
 			free(entry->args.ex_indexfile);
 		free(entry);
@@ -62,9 +58,29 @@ FreeExportEntry(struct export_entry *entry)
 	return;
 }
 
+static void
+FreeExportNode(struct export_node *node)
+{
+	size_t indx;
+	
+	free(node->export_name);
+	if (node->default_export.export_path)
+		free(node->default_export.export_path);
+	if (node->default_export.args.ex_indexfile)
+		free(node->default_export.args.ex_indexfile);
 
-static struct export_tree *root;
+	for (indx = 0; indx < node->export_count; indx++) {
+		FreeExportEntry(node->exports[indx]);
+	}
+	free(node);
+	return;
+}
 
+void
+ReleaseTree(void)
+{
+	return;
+}
 
 /*
  * Return the node with the best match for

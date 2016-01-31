@@ -6,6 +6,7 @@
 #include <syslog.h>
 
 #include "mountd.h"
+#include "pathnames.h"
 
 int debug = 0;
 int verbose = 0;
@@ -61,6 +62,12 @@ main(int ac, char **av)
 	char *line;
 	int c;
 	struct Find *findit = NULL;
+	char **export_files = NULL;
+	size_t ef_count = 0;
+	size_t indx;
+	static char *default_export = _PATH_EXPORTS;
+	static char **default_exports = &default_export;
+	
 	
 	while ((c = getopt(ac, av, "2nrdvlF:")) != -1) {
 		switch (c) {
@@ -82,24 +89,24 @@ main(int ac, char **av)
 	ac -= optind;
 
 	if (ac == 0) {
-		exp_file = "/etc/exports";
-		ac = 1;	// hack
+		export_files = default_exports;
+		ef_count = 1;
+
 	} else {
-		exp_file = *av++;
+		export_files = av;
+		ef_count = ac;
 	}
 
-	if (ac > 0) {
-		UnexportFilesystems();
-	}
-	do {
+	UnexportFilesystems();
+	for (indx = 0; indx < ef_count; indx++) {
+		exp_file = export_files[indx];
 		FILE *fp = fopen(exp_file, "r");
 		if (fp == NULL) {
 			warn("Could not open %s", exp_file);
 		}
 		read_export_file(fp);
 		fclose(fp);
-		ac--, av++;
-	} while (ac != 0);
+	}
 	
 	if (verbose)
 		PrintTree();

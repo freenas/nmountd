@@ -104,7 +104,7 @@ extern struct export_entry *CreateExportEntry(const char *,
 					      struct export_args *,
 					      size_t,
 					      struct network_entry *);
-extern void FreeExportEntry(struct export_entry *);
+
 extern int AddEntryToTree(const char *, struct export_entry *);
 
 extern void PrintTree(void);
@@ -115,6 +115,8 @@ extern void IterateTree(int (^)(struct export_node *));
 
 extern struct export_tree *FindNodeBestName(const char *);
 extern struct export_entry *FindBestExportForAddress(const char *, struct sockaddr *, char **);
+
+extern void ReleaseTree(void);
 
 // Parsing
 extern void read_export_file(FILE *);
