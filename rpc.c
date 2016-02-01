@@ -254,12 +254,12 @@ xdr_explist_common(XDR *xdrsp, caddr_t cp __unused, int brief)
 				}
 				free(strp);
 				
-				if (debug)
-					fprintf(stderr, "<true>");
-				if (!xdr_bool(xdrsp, &true))
-					return (1);
-
 				if (brief) {
+					if (debug)
+						fprintf(stderr, "<true>");
+					if (!xdr_bool(xdrsp, &true))
+						return (1);
+					
 					strp = "(...)";
 					if (debug)
 						fprintf(stderr, " %s", strp);
@@ -272,6 +272,11 @@ xdr_explist_common(XDR *xdrsp, caddr_t cp __unused, int brief)
 						struct network_entry *np = &exp->entries[network_indx];
 						char host[255];
 						struct sockaddr *sap = np->network;
+
+						if (debug)
+							fprintf(stderr, "<true>");
+						if (!xdr_bool(xdrsp, &true))
+							return (1);
 
 						if (np->mask == NULL) {
 							// A host

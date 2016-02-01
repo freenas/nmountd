@@ -231,7 +231,8 @@ static struct export_node *
 AddEntryToNode(struct export_node *node, struct export_entry *entry)
 {
 	struct export_node *retval = NULL;
-
+	size_t indx;
+	
 	/*
 	 * If entry->network_count is 0, this is a default entry.
 	 * We need to see if there is already a default entry.
@@ -246,6 +247,50 @@ AddEntryToNode(struct export_node *node, struct export_entry *entry)
 		}
 		goto done;
 	}
+
+	/*
+	 * Next thing we can do is see if this is just adding another
+	 * network_entry to the export_entry list.  To do that, we check
+	 * all of the export entries, and compare the values.
+	 * This also will check to see if the network/mask is already on
+	 * the list, and do nothing in that case.
+	 */
+	for (indx = 0; indx < node->export_count; indx++) {
+		struct export_entry *ep = node->exports[indx];
+
+		if (strcmp(entry->export_path, ep->export_path) == 0 &&
+		    entry->export_flags == ep->export_flags &&
+		    entry->args.ex_flags == ep->args.ex_flags &&
+		    entry->args.ex_root == ep->args.ex_root &&
+		    memcmp(&entry->args.ex_anon, &ep->args.ex_anon, sizeof(ep->args.ex_anon)) == 0) {
+			/*
+			 * We want to merge entry, into ep.
+			 * To do this, we iterate through entry->exports, and compare each
+			 * entry to ep->exports.  Note that when we realloc, we need
+			 * change node->exports[indx]
+			 *
+			 * You know, for now, let's just add them all.
+			 */
+			size_t new_size;
+			size_t new_index;
+			
+			new_size = ENTRY_SIZE(entry) + entry->network_count * sizeof(struct network_entry);
+			ep = realloc(ep, new_size);
+			if (ep == NULL) {
+				warn("Could not add new entries to node, sorry");
+				out_of_mem();
+			}
+			node->exports[indx] = ep;
+			for (new_index = 0;
+			     new_index < entry->network_count;
+			     new_index++) {
+				ep->entries[ep->network_count++] = entry->entries[new_index];
+			}
+			free(entry);
+			return node;
+		}
+	}
+		    
 	retval = realloc(node, NODE_SIZE(node) + ENTRY_SIZE(entry));
 	if (retval == NULL) {
 		errno = ENOMEM;
