@@ -519,6 +519,16 @@ mntsrv(struct svc_req *rqstp, SVCXPRT *transp)
 			return;
 		}
 		warnx("Got fhandle for %s", dirpath);
+		fhr.fhr_flag = 1;
+		{
+			char fh_buf[sizeof(fhr.fhr_fh)*2 + 1] = { 0 };
+			size_t x;
+			for (x = 0; x < sizeof(fhr.fhr_fh); x++)
+				sprintf(fh_buf, "%s%02x", fh_buf, fhr.fhr_fh.fh_bytes[x]);
+			
+			warnx("fhr = { fhr_flag = %d, fhr_vers = %d, fhr_fh = 0x%s, numsecflavors = %d }",
+			      fhr.fhr_flag, fhr.fhr_vers, fh_buf, fhr.fhr_numsecflavors);
+		}
 		if (!svc_sendreply(transp, (xdrproc_t)xdr_fhs,
 				   (caddr_t)&fhr)) {
 			warn("Could not send fh reply");

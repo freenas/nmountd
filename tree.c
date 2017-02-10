@@ -139,6 +139,8 @@ ReleaseTree(void)
  * Return the node with the best match for
  * the given name.
  */
+#define TREE_DEBUG
+
 struct export_tree *
 FindNodeBestName(const char *name)
 {

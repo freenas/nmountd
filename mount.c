@@ -181,7 +181,9 @@ ExportFilesystems(void)
 			build_iovec(&iov, &iovlen, "export", &export, sizeof(export));
 			build_iovec(&iov, &iovlen, "errmsg", errmsg, sizeof(errmsg));
 			
-			fprintf(stderr, "\texp->export_count = %zd\n", exp->export_count);
+			warnx("\texp->export_count = %zd, exp->export_name = %s",
+			      exp->export_count, exp->export_name);
+			
 			for (entry = 0; entry < exp->export_count; entry++) {
 				struct export_entry *ep = exp->exports[entry];
 				struct statfs sfs;
@@ -211,8 +213,6 @@ ExportFilesystems(void)
 				SET_STR(iov[1], sfs.f_fstypename);
 				SET_STR(iov[3], sfs.f_mntonname);
 				SET_STR(iov[5], sfs.f_mntfromname);
-#undef SET_STR
-				
 #define PRINTIOV(iov, indx) do {					\
 					fprintf(stderr, "******%s = %s\n", iov[indx].iov_base, iov[indx+1].iov_base); \
 				} while (0)
@@ -252,21 +252,52 @@ ExportFilesystems(void)
 						warn("Cannot export %s: %s", sfs.f_mntonname, errmsg);
 					}
 				}
-				if (exp->default_export.export_path) {
-					// Export the default entry
-					export = exp->default_export.args;
-					export.ex_flags |= MNT_EXPORTED;
-					export.ex_addr = export.ex_mask = NULL;
-					export.ex_addrlen = export.ex_masklen = 0;
-					if (debug) {
-						warnx("About to default export %s", sfs.f_mntonname);
-					}
-					errmsg[0] = 0;
-					if (nmount(iov, iovlen, sfs.f_flags) == -1) {
-						warn("Cannot defaul texport %s: %s", sfs.f_mntonname, errmsg);
-					}
+			}
+			if (exp->default_export.export_path) {
+				// Export the default entry
+				struct export_entry *ep = &exp->default_export;
+				struct statfs sfs;
+				size_t net_entry;
+				char *real_path;
+				
+				real_path = realpath(ep->export_path, NULL);
+				if (real_path == NULL) {
+					warn("Could not export %s -- not a real path", ep->export_path);
+					goto done;
+				}
+				if (statfs(real_path, &sfs) == -1) {
+					warn("Could not find %s (really %s), cannot export", real_path, ep->export_path);
+					free(real_path);
+					goto done;
+				}
+				if ((ep->export_flags & OPT_ALLDIRS) == 0 &&
+				    strcmp(real_path, sfs.f_mntonname) != 0) {
+					warn("-alldirs specified, but %s is not a mount point", ep->export_path);
+					free(real_path);
+					goto done;
+				}
+				SET_STR(iov[1], sfs.f_fstypename);
+				SET_STR(iov[3], sfs.f_mntonname);
+				SET_STR(iov[5], sfs.f_mntfromname);
+				PRINTIOV(iov, 0);
+				PRINTIOV(iov, 2);
+				PRINTIOV(iov, 4);
+				
+				export = ep->args;
+				export.ex_addr = NULL;
+				export.ex_addrlen = 0;
+				export.ex_mask = NULL;
+				export.ex_masklen = 0;
+				export.ex_flags |= MNT_EXPORTED;
+				if (debug) {
+					warnx("About to export %s for default hosts", sfs.f_mntonname);
+				}
+				errmsg[0] = 0;
+				if (nmount(iov, iovlen, sfs.f_flags) == -1) {
+					warn("Cannot export %s: %s", sfs.f_mntonname, errmsg);
 				}
 			}
+		done:
 			free(iov[0].iov_base); // fstype
 			free(iov[2].iov_base); // fspath
 			free(iov[4].iov_base); // from
